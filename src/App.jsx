@@ -765,7 +765,7 @@ export default function App() {
         <header className="topbar">
           <div className="breadcrumb">Scarap_Yukti <span>/</span> <strong>Overview</strong></div>
           <div className="top-actions">
-            <span className={authSession ? "connected-pill" : "demo-pill"}><span className="dot"></span> {authSession ? role === "Collector" ? "SUPABASE · READ + CREATE LOTS" : role === "Recycler" ? "SUPABASE · READ + OFFERS" : "SUPABASE ADMIN WORKFLOW" : "DEMO DATA"}</span>
+            <span className={authSession ? "connected-pill" : "demo-pill"}><span className="dot"></span> {authSession ? role === "Collector" ? "SUPABASE · READ + CREATE LOTS + OFFER DECISIONS" : role === "Recycler" ? "SUPABASE · READ + OFFERS" : "SUPABASE ADMIN WORKFLOW" : "DEMO DATA"}</span>
             <button className="icon-btn" title="Help" onClick={() => notify(authSession ? "Supabase reads, Collector lot creation, Recycler offer submission, and Collector offer decisions are connected. Payments and recycler verification are not connected. Admin workflow actions use the database RPC." : "This is a local frontend demo. The role selector does not sign you in or enforce secure permissions.")}><CircleHelp size={19} /></button>
             <button className="icon-btn" title="Notifications" onClick={() => notify(authSession ? "Supabase notifications are not connected yet." : "You are all caught up in this demo.")}><Bell size={19} /></button>
             {authSession && profile
@@ -861,7 +861,7 @@ function AuthPanel({ configured, session, profile, mode, setMode, form, setForm,
       <label>Password<input type="password" autoComplete={mode === "signup" ? "new-password" : "current-password"} required value={form.password} onChange={e => setForm(prev => ({ ...prev, password: e.target.value }))} /></label>
       <div className="auth-form-actions"><button className="btn btn-primary btn-small" type="submit" disabled={busy}>{busy ? "Please wait…" : mode === "signup" ? "Create account" : "Sign in"}</button><button className="auth-mode-toggle" type="button" onClick={() => setMode(mode === "signup" ? "signin" : "signup")} disabled={busy}>{mode === "signup" ? "Already registered? Sign in" : "New here? Create an account"}</button>{mode === "signin" && <button className="auth-mode-toggle" type="button" onClick={onForgotPassword} disabled={busy}>Forgot password?</button>}</div>
       {message && <p className={`auth-message ${messageType}`} role={messageType === "error" ? "alert" : "status"}>{message}</p>}
-      <p className="auth-demo-note">New accounts receive the Collector role from the database trigger. This phase does not connect marketplace data or offer role promotion.</p>
+      <p className="auth-demo-note">After sign-in, marketplace data loads from Supabase. New accounts receive the Collector role from the database; users cannot choose or promote their own role here.</p>
     </form>}
     {session && profile && message && <p className={`auth-message ${messageType}`} role={messageType === "error" ? "alert" : "status"}>{message}</p>}
   </section>;
