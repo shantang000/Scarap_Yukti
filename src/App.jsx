@@ -6,6 +6,7 @@ import {
 } from "lucide-react";
 import { hasSupabaseConfig, supabase } from "./lib/supabase.js";
 import { loadMarketplaceSnapshot } from "./lib/marketplaceReads.js";
+import { raiseDispute, recordHandoverWeight } from "./lib/lotActions.js";
 import { applyDemoWorkflowTransition, decideDemoOffer } from "./lib/workflowRules.js";
 
 const STORAGE_KEY = "scarap-yukti-demo-v1";
@@ -659,6 +660,21 @@ export default function App() {
     setOfferLot(null); setOfferPrice(""); setOfferMessage(""); setOfferError(""); notify("Demo offer saved locally. No real transaction was made.");
   }
 
+  async function runTraceAction(kind, lotId, value) {
+    if (!authSession || !supabase) return;
+    try {
+      if (kind === "weight") await recordHandoverWeight(lotId, value);
+      else await raiseDispute(lotId, value);
+      setReloadToken(v => v + 1);
+      notify(kind === "weight"
+        ? "Handover weight recorded. A difference above 10% is flagged for Admin review."
+        : "Dispute raised. An Admin will review this lot. Refreshing marketplace data.");
+    } catch (error) {
+      notify(error.message || "The action could not be saved.", "error");
+    }
+  }
+  const traceProps = { onWeight: (id, v) => runTraceAction("weight", id, v), onDispute: (id, v) => runTraceAction("dispute", id, v) };
+
   function exportData() {
     if (authSession) { notify("Demo export is available after signing out.", "error"); return; }
     const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
@@ -780,7 +796,7 @@ export default function App() {
           <section className="stats-grid">
             {(role === "Collector" ? collectorStats : role === "Recycler" ? recyclerStats : adminStats).map(stat => <StatCard key={stat.label} {...stat} />)}
           </section>
-          {currentSection === "activity" ? <ActivityPanel activity={viewData.activity} workflowEvents={viewData.workflowEvents} lots={viewData.lots} connected={Boolean(authSession)} ancillaryErrors={connectedData?.ancillaryErrors || []} onRetry={() => setReloadToken(value => value + 1)} retrying={marketplaceState === "loading"} /> : role === "Collector" ? <CollectorDashboard lots={visibleLots.filter(lot => authSession ? lot.collectorId === authSession.user.id : lot.collector === DEMO_COLLECTOR)} allLotCount={collectorLots.length} query={query} setQuery={setQuery} onAdd={() => setShowForm(true)} onDecision={decideOffer} decisionBusyOfferId={decisionBusyOfferId} readOnly={Boolean(authSession)} /> : role === "Recycler" ? currentSection === "my-offers" ? <RecyclerOffers offers={myOffers} connected={Boolean(authSession)} /> : <RecyclerDashboard lots={visibleLots.filter(lot => ["Open", "Offer submitted"].includes(lot.status))} query={query} setQuery={setQuery} categoryFilter={categoryFilter} setCategoryFilter={setCategoryFilter} locationFilter={locationFilter} setLocationFilter={setLocationFilter} statusFilter={statusFilter} setStatusFilter={setStatusFilter} categories={categories} locations={locations} myOffers={myOffers} currentRecyclerId={authSession?.user?.id} readOnly={Boolean(authSession)} onOffer={lot => { setOfferLot(lot); setOfferPrice(""); setOfferMessage(""); setOfferError(""); }} /> : <AdminDashboard lots={visibleLots} query={query} setQuery={setQuery} statusFilter={statusFilter} setStatusFilter={setStatusFilter} evidenceDrafts={evidenceDrafts} setEvidenceDrafts={setEvidenceDrafts} disputeDrafts={disputeDrafts} setDisputeDrafts={setDisputeDrafts} onTransition={transitionLot} onConnectedTransition={handleAdminTransition} busyLotId={workflowBusyLotId} canManage={Boolean(authSession && profile?.role === "admin")} readOnly={Boolean(authSession)} />}
+          {currentSection === "activity" ? <ActivityPanel activity={viewData.activity} workflowEvents={viewData.workflowEvents} lots={viewData.lots} connected={Boolean(authSession)} ancillaryErrors={connectedData?.ancillaryErrors || []} onRetry={() => setReloadToken(value => value + 1)} retrying={marketplaceState === "loading"} /> : role === "Collector" ? <CollectorDashboard {...traceProps} lots={visibleLots.filter(lot => authSession ? lot.collectorId === authSession.user.id : lot.collector === DEMO_COLLECTOR)} allLotCount={collectorLots.length} query={query} setQuery={setQuery} onAdd={() => setShowForm(true)} onDecision={decideOffer} decisionBusyOfferId={decisionBusyOfferId} readOnly={Boolean(authSession)} /> : role === "Recycler" ? currentSection === "my-offers" ? <RecyclerOffers {...traceProps} offers={myOffers} connected={Boolean(authSession)} /> : <RecyclerDashboard lots={visibleLots.filter(lot => ["Open", "Offer submitted"].includes(lot.status))} query={query} setQuery={setQuery} categoryFilter={categoryFilter} setCategoryFilter={setCategoryFilter} locationFilter={locationFilter} setLocationFilter={setLocationFilter} statusFilter={statusFilter} setStatusFilter={setStatusFilter} categories={categories} locations={locations} myOffers={myOffers} currentRecyclerId={authSession?.user?.id} readOnly={Boolean(authSession)} onOffer={lot => { setOfferLot(lot); setOfferPrice(""); setOfferMessage(""); setOfferError(""); }} /> : <AdminDashboard lots={visibleLots} query={query} setQuery={setQuery} statusFilter={statusFilter} setStatusFilter={setStatusFilter} evidenceDrafts={evidenceDrafts} setEvidenceDrafts={setEvidenceDrafts} disputeDrafts={disputeDrafts} setDisputeDrafts={setDisputeDrafts} onTransition={transitionLot} onConnectedTransition={handleAdminTransition} busyLotId={workflowBusyLotId} canManage={Boolean(authSession && profile?.role === "admin")} readOnly={Boolean(authSession)} />}
           <footer className="footer"><span>© 2026 Scarap_Yukti · Prototype workspace</span><span>{authSession ? "Supabase reads, Collector lot creation and offer decisions, Recycler offers, and Admin workflow RPC actions." : "Simulated workflow and recycling evidence; no verified recycler service."}</span></footer>
         </div>
       </main>
@@ -932,7 +948,7 @@ function LotFilters({ query, setQuery, statusFilter, setStatusFilter, categories
   </div>;
 }
 
-function CollectorDashboard({ lots, allLotCount, query, setQuery, onAdd, onDecision, decisionBusyOfferId, readOnly = false }) {
+function CollectorDashboard({ onWeight, onDispute, lots, allLotCount, query, setQuery, onAdd, onDecision, decisionBusyOfferId, readOnly = false }) {
   return <section className="panel dashboard-panel"><div className="panel-heading"><div><h2>My e-waste lots</h2><p>{readOnly ? "Supabase lot and offer records. Accept/reject decisions are checked by the database; other workflow updates are not connected." : "Compare recycler offers, then accept or reject each pending offer."}</p></div><span className={readOnly ? "connected-label" : "demo-label"}>{readOnly ? "CONNECTED COLLECTOR" : "DEMO COLLECTOR"}</span></div>
     <div className="filters role-filters"><div className="search-box"><Search size={17} /><input value={query} onChange={e => setQuery(e.target.value)} placeholder="Search my lots..." aria-label="Search my lots" /></div><span className="filters-note">Showing {lots.length} of {allLotCount} lots</span></div>
     {lots.length ? <div className="lot-card-list">{lots.map(lot => <article className="workflow-card" key={lot.id}>
@@ -940,6 +956,7 @@ function CollectorDashboard({ lots, allLotCount, query, setQuery, onAdd, onDecis
       <div className="lot-meta-grid"><span><strong>{lot.weight} kg</strong><small>Estimated weight</small></span><span><MapPin size={14} /> {lot.location}<small>Approximate pickup area</small></span><span><strong>{shortDate(lot.date)}</strong><small>Created</small></span></div>
       {lot.notes && <p className="lot-notes">{lot.notes}</p>}
       <div className="workflow-progress"><span>Pickup and recycling status</span><strong>{statusLabel(lot.status)}</strong><ProgressTrack status={lot.status} /></div>
+      <LotTraceActions lot={lot} mode={readOnly ? "collector" : "info"} onWeight={onWeight} onDispute={onDispute} />
       {lot.status === "Recycling review" && lot.evidence && <div className="evidence-note"><ShieldCheck size={15} /><div><strong>{readOnly ? "Evidence/review note · not independently verified" : "Demo evidence submitted"}</strong><span>{lot.evidence}</span></div></div>}
       <div className="offers-heading"><strong>Offers received ({lot.offers.length})</strong><span>Compare amounts and terms before deciding</span></div>
       {lot.offers.length ? <div className="offer-grid">{lot.offers.slice().sort((a, b) => b.price - a.price).map(offer => <article className={`offer-card ${offer.status}`} key={offer.id}><div className="offer-card-top"><strong>{offer.recycler}</strong><OfferStatusPill status={offer.status} /></div><div className="offer-price">{money(offer.price)}</div><p>{offer.message || "No message provided."}</p>{offer.status === "pending" && lot.status === "Offer submitted" ? <div className="offer-actions"><button className="btn btn-light btn-small" disabled={Boolean(decisionBusyOfferId)} onClick={() => onDecision(lot.id, offer.id, "rejected")}>{decisionBusyOfferId === offer.id ? "Saving…" : "Reject"}</button><button className="btn btn-primary btn-small" disabled={Boolean(decisionBusyOfferId)} onClick={() => onDecision(lot.id, offer.id, "accepted")}>{decisionBusyOfferId === offer.id ? "Saving…" : "Accept offer"}</button></div> : null}</article>)}</div> : <EmptyState title="No offers yet" detail="Recycler offers will appear here for comparison." compact />}
@@ -962,9 +979,9 @@ function RecyclerDashboard({ lots, query, setQuery, categoryFilter, setCategoryF
   </section>;
 }
 
-function RecyclerOffers({ offers, connected = false }) {
+function RecyclerOffers({ offers, connected = false, onWeight, onDispute }) {
   return <section className="panel dashboard-panel"><div className="panel-heading"><div><h2>My submitted offers</h2><p>Follow collector decisions and the associated lot workflow.</p></div><span className={connected ? "connected-label" : "demo-label"}>{connected ? "CONNECTED RECYCLER" : "DEMO RECYCLER"}</span></div>
-    {offers.length ? <div className="lot-card-list">{offers.map(offer => <article className="workflow-card compact-card" key={offer.id}><div className="offer-card-top"><div><strong>{offer.lot.title}</strong><small>{offer.lot.id} · {offer.lot.category} · {offer.lot.location}</small></div><OfferStatusPill status={offer.status} /></div><div className="submitted-offer-details"><span className="offer-price">{money(offer.price)}</span><span>Lot status <StatusPill status={offer.lot.status} /></span></div><p className="lot-notes">{offer.message}</p></article>)}</div> : <EmptyState title="No offers submitted" detail={connected ? "Submit an offer from an available lot to see it here." : "Browse available lots and submit a demo offer to see it here."} />}
+    {offers.length ? <div className="lot-card-list">{offers.map(offer => <article className="workflow-card compact-card" key={offer.id}><div className="offer-card-top"><div><strong>{offer.lot.title}</strong><small>{offer.lot.id} · {offer.lot.category} · {offer.lot.location}</small></div><OfferStatusPill status={offer.status} /></div><div className="submitted-offer-details"><span className="offer-price">{money(offer.price)}</span><span>Lot status <StatusPill status={offer.lot.status} /></span></div><p className="lot-notes">{offer.message}</p>{connected && offer.status === "accepted" && <LotTraceActions lot={offer.lot} mode="recycler" onWeight={onWeight} onDispute={onDispute} />}</article>)}</div> : <EmptyState title="No offers submitted" detail={connected ? "Submit an offer from an available lot to see it here." : "Browse available lots and submit a demo offer to see it here."} />}
   </section>;
 }
 
@@ -982,6 +999,7 @@ function AdminDashboard({ lots, query, setQuery, statusFilter, setStatusFilter, 
     {lots.length ? <div className="lot-card-list">{lots.map(lot => <article className="workflow-card" key={lot.id}>
       <LotHeading lot={lot} /><div className="admin-lot-topline"><span>Collector: {lot.collector || DEMO_COLLECTOR}</span><span>{lot.weight} kg · {lot.location}</span></div>
       <ProgressTrack status={lot.status} />
+      <LotTraceActions lot={lot} mode="info" />
       <div className="admin-offers"><strong>Offers ({lot.offers.length})</strong>{lot.offers.length ? lot.offers.map(offer => <div className="admin-offer-row" key={offer.id}><span><strong>{offer.recycler}</strong><small>{offer.message}</small></span><b>{money(offer.price)}</b><OfferStatusPill status={offer.status} /></div>) : <p>No offers submitted.</p>}</div>
       {(!readOnly || canManage) && lot.status === "Pickup scheduled" && <div className="admin-action-row"><span>{readOnly ? "Coordinate pickup separately; mark collected only after handover has happened." : "No appointment is scheduled by this demo. Record collection only after the demo handover."}</span><button className="btn btn-light btn-small" disabled={disabled(lot.id)} onClick={() => runTransition(lot.id, "collected", "Collected")}>{busy(lot.id) ? "Saving…" : "Mark collected"}</button></div>}
       {(!readOnly || canManage) && lot.status === "Collected" && <div className="evidence-entry"><label>{readOnly ? "Evidence / review note (10–500 characters)" : "Demo recycling evidence / review notes"}<textarea rows="2" minLength="10" maxLength="500" value={evidenceDrafts[lot.id] || ""} onChange={e => setEvidenceDrafts(prev => ({ ...prev, [lot.id]: e.target.value }))} placeholder="Describe the evidence or review note" /></label><button className="btn btn-primary btn-small" disabled={disabled(lot.id)} onClick={() => runTransition(lot.id, "recycling_review", "Recycling review", evidenceDrafts[lot.id] || "")}>{busy(lot.id) ? "Saving…" : "Submit for recycling review"}</button></div>}
@@ -991,6 +1009,27 @@ function AdminDashboard({ lots, query, setQuery, statusFilter, setStatusFilter, 
       {canManage && lot.status === "Disputed" && <div className="admin-action-row"><span>Workflow paused for Admin review. The original status is saved by the database.</span><button className="btn btn-light btn-small" disabled={disabled(lot.id)} onClick={() => runTransition(lot.id, "resume", "Open")}>{busy(lot.id) ? "Saving…" : "Resume workflow"}</button></div>}
     </article>)}</div> : <EmptyState title="No lots match these filters" detail="Clear or change the filters to see marketplace records." />}
   </section>;
+}
+
+const DISPUTE_FROM = ["Pickup scheduled", "Collected", "Recycling review"];
+
+function LotTraceActions({ lot, mode, onWeight, onDispute }) {
+  const [weight, setWeight] = useState("");
+  const [note, setNote] = useState("");
+  const [busy, setBusy] = useState(false);
+  const run = async (fn, value) => {
+    setBusy(true);
+    try { await fn(lot.id, value); setWeight(""); setNote(""); } finally { setBusy(false); }
+  };
+  const canWeigh = mode === "recycler" && lot.status === "Collected" && !lot.actualWeight;
+  const canDispute = (mode === "recycler" || mode === "collector") && DISPUTE_FROM.includes(lot.status);
+  const flagged = Number(lot.discrepancyPct) > 10;
+  if (!lot.actualWeight && !canWeigh && !canDispute) return null;
+  return <div className="trace-actions">
+    {lot.actualWeight ? <div className={`inline-hint ${flagged ? "warning" : ""}`}><ShieldCheck size={15} /> Handover weight: <strong>{lot.actualWeight} kg</strong> vs estimated {lot.weight} kg · difference {lot.discrepancyPct}%{flagged ? " · flagged for Admin review" : ""}. Recorded by the accepted recycler; not independently verified.</div> : null}
+    {canWeigh && <div className="evidence-entry"><label>Actual handover weight (kg)<input type="number" min="0.1" max="100000" step="0.1" value={weight} onChange={e => setWeight(e.target.value)} placeholder="e.g. 9.5" /></label><button className="btn btn-primary btn-small" disabled={busy || !weight} onClick={() => run(onWeight, weight)}>{busy ? "Saving…" : "Record weight"}</button></div>}
+    {canDispute && <div className="evidence-entry"><label>Raise a dispute (10–500 characters)<textarea rows="2" minLength="10" maxLength="500" value={note} onChange={e => setNote(e.target.value)} placeholder="Describe the problem for Admin review" /></label><button className="btn btn-light btn-small" disabled={busy || note.trim().length < 10} onClick={() => run(onDispute, note)}>{busy ? "Saving…" : "Raise dispute"}</button></div>}
+  </div>;
 }
 
 function LotHeading({ lot }) {
