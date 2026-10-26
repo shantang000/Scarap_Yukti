@@ -32,7 +32,7 @@ export async function loadMarketplaceSnapshot() {
   const [lotsResult, offersResult, ancillaryResults] = await Promise.all([
     supabase
       .from("lots")
-      .select("id, collector_id, title, category, weight_kg, location, notes, status, evidence_note, created_at, updated_at")
+      .select("id, collector_id, title, category, weight_kg, actual_weight_kg, weight_discrepancy_pct, location, notes, status, evidence_note, created_at, updated_at")
       .order("created_at", { ascending: false }),
     supabase
       .from("offers")
@@ -106,6 +106,8 @@ export async function loadMarketplaceSnapshot() {
     title: lot.title,
     category: lot.category,
     weight: Number(lot.weight_kg),
+    actualWeight: lot.actual_weight_kg == null ? null : Number(lot.actual_weight_kg),
+    discrepancyPct: lot.weight_discrepancy_pct == null ? null : Number(lot.weight_discrepancy_pct),
     location: lot.location,
     date: displayDate(lot.created_at),
     status: displayStatus(lot.status),
