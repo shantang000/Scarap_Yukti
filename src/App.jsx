@@ -6,6 +6,7 @@ import {
 } from "lucide-react";
 import { hasSupabaseConfig, supabase } from "./lib/supabase.js";
 import { loadMarketplaceSnapshot } from "./lib/marketplaceReads.js";
+import { applyDemoWorkflowTransition, decideDemoOffer } from "./lib/workflowRules.js";
 
 const STORAGE_KEY = "scarap-yukti-demo-v1";
 const DEMO_COLLECTOR = "Demo Collector";
@@ -17,16 +18,6 @@ const starterLots = [
 ];
 const seed = { lots: starterLots, activity: [{ id: 1, text: "Welcome to your Scarap_Yukti demo workspace", time: "Just now" }] };
 const statusOptions = ["Open", "Offer submitted", "Pickup scheduled", "Collected", "Recycling review", "Recycled", "Disputed"];
-const allowedTransitions = {
-  Open: ["Offer submitted"],
-  "Offer submitted": ["Open", "Pickup scheduled"],
-  "Pickup scheduled": ["Collected"],
-  Collected: ["Recycling review"],
-  "Recycling review": ["Recycled"],
-  Recycled: [],
-  Disputed: []
-};
-
 function safeString(value, fallback = "") {
   return typeof value === "string" ? value : fallback;
 }
@@ -467,19 +458,21 @@ export default function App() {
     if (authSession) { notify("Connected mode is read-only in this phase.", "error"); return; }
     const currentLot = data.lots.find(lot => lot.id === id);
     if (!currentLot || currentLot.status === status) return;
-    if (!allowedTransitions[currentLot.status]?.includes(status)) {
+    const result = applyDemoWorkflowTransition(currentLot, status, evidence);
+    if (!result.ok && result.reason === "invalid_transition") {
       notify(`That workflow step is not allowed from ${currentLot.status}.`, "error"); return;
     }
-    if (status === "Recycling review" && evidence.trim().length < 10) {
-      notify("Add at least 10 characters describing the demo recycling evidence.", "error"); return;
+    if (!result.ok && result.reason === "evidence_note_length") {
+      notify("Add a demo recycling evidence note between 10 and 500 characters.", "error"); return;
     }
-    if (status === "Recycled" && !currentLot.evidence.trim()) {
+    if (!result.ok && result.reason === "evidence_required") {
       notify("Recycling evidence is required before marking this lot recycled.", "error"); return;
     }
+    if (!result.ok) return;
     setData(prev => ({
       ...prev,
-      lots: prev.lots.map(lot => lot.id === id ? { ...lot, status, ...(evidence ? { evidence: evidence.trim() } : {}) } : lot),
-      activity: logActivity(prev, `${id} moved to ${status}${evidence ? " with demo evidence notes" : ""}`)
+      lots: prev.lots.map(lot => lot.id === id ? result.lot : lot),
+      activity: logActivity(prev, `${id} moved to ${status}${result.evidenceSaved ? " with demo evidence notes" : ""}`)
     }));
     notify(`Status updated to “${status}”.`);
   }
@@ -568,7 +561,7 @@ export default function App() {
         if (error) throw error;
         setReloadToken(value => value + 1);
         notify(decision === "accepted"
-          ? "Offer accepted. Pickup is scheduled, and other pending offers on this lot were rejected. Refreshing marketplace data."
+          ? "Offer accepted. Pickup coordination is still required; this app does not confirm an appointment. Other pending offers on this lot were rejected. Refreshing marketplace data."
           : "Offer rejected. Other pending offers remain available for review; the lot reopens if none remain. Refreshing marketplace data.");
       } catch (error) {
         const detail = error.message || "The offer decision could not be saved.";
@@ -586,33 +579,20 @@ export default function App() {
 
     const lot = data.lots.find(item => item.id === lotId);
     const target = lot?.offers.find(item => item.id === offerId);
-    if (!lot || !target || target.status !== "pending" || lot.status !== "Offer submitted") {
+    const result = decideDemoOffer(lot, offerId, decision);
+    if (!result.ok) {
       notify("This offer can no longer be changed.", "error"); return;
     }
-    if (decision === "accepted") {
-      setData(prev => ({
-        ...prev,
-        lots: prev.lots.map(item => item.id === lotId ? {
-          ...item,
-          status: "Pickup scheduled",
-          offers: item.offers.map(offer => ({ ...offer, status: offer.id === offerId ? "accepted" : offer.status === "pending" ? "rejected" : offer.status }))
-        } : item),
-        activity: logActivity(prev, `${lotId}: offer from ${target.recycler} accepted; pickup scheduled`)
-      }));
-      notify("Offer accepted. Pickup is now scheduled in this demo.");
-      return;
-    }
-    const remainingPending = lot.offers.some(offer => offer.id !== offerId && offer.status === "pending");
     setData(prev => ({
       ...prev,
-      lots: prev.lots.map(item => item.id === lotId ? {
-        ...item,
-        status: remainingPending ? "Offer submitted" : "Open",
-        offers: item.offers.map(offer => offer.id === offerId ? { ...offer, status: "rejected" } : offer)
-      } : item),
-      activity: logActivity(prev, `${lotId}: offer from ${target.recycler} rejected`)
+      lots: prev.lots.map(item => item.id === lotId ? result.lot : item),
+      activity: logActivity(prev, `${lotId}: offer from ${target.recycler} ${decision === "accepted" ? "accepted; pickup coordination required" : "rejected"}`)
     }));
-    notify(remainingPending ? "Offer rejected. Other offers are still pending." : "Offer rejected. The lot is open for new offers.");
+    if (decision === "accepted") {
+      notify("Offer accepted. Pickup coordination is still required; this demo does not confirm an appointment.");
+      return;
+    }
+    notify(result.lot.status === "Open" ? "Offer rejected. The lot is open for new offers." : "Offer rejected. Other offers are still pending.");
   }
 
   async function submitOffer(e) {
@@ -709,7 +689,7 @@ export default function App() {
     { label: "Available lots", value: viewData.lots.filter(lot => ["Open", "Offer submitted"].includes(lot.status) && !lot.offers.some(offer => authSession ? offer.recyclerId === authSession.user.id : offer.recycler === DEMO_RECYCLER)).length, note: "Accepting offers", icon: <Search />, tone: "teal" },
     { label: "My offers", value: myOffers.length, note: authSession ? "Submitted by your account" : "Submitted by this demo recycler", icon: <Wallet />, tone: "blue" },
     { label: "Pending", value: myOffers.filter(item => item.status === "pending").length, note: "Awaiting collector decision", icon: <Activity />, tone: "orange" },
-    { label: "Accepted", value: myOffers.filter(item => item.status === "accepted").length, note: authSession ? "Database offer status" : "Pickup scheduled in demo", icon: <Check />, tone: "purple" }
+    { label: "Accepted", value: myOffers.filter(item => item.status === "accepted").length, note: authSession ? "Database offer status" : "Pickup coordination required in demo", icon: <Check />, tone: "purple" }
   ];
   const adminStats = [
     { label: "All lots", value: viewData.lots.length, note: authSession ? "Visible to your account" : "Across this browser workspace", icon: <Package />, tone: "teal" },
@@ -753,7 +733,7 @@ export default function App() {
         </div>
         <div className="workspace-label">WORKSPACE</div>
         <nav className="nav-list">
-          {navigation.map(item => <button key={item.key} type="button" className={`nav-item ${currentSection === item.key ? "active" : ""}`} onClick={() => setSection(item.key)}>{item.icon} {item.label}{item.key === "lots" && role === "Admin" ? <span className="nav-count">{viewData.lots.length}</span> : null}{item.key === "my-offers" ? <span className="nav-count">{myOffers.length}</span> : null}</button>)}
+          {navigation.map(item => <button key={item.key} type="button" className={`nav-item ${currentSection === item.key ? "active" : ""}`} aria-current={currentSection === item.key ? "page" : undefined} onClick={() => setSection(item.key)}><span className="nav-item-icon" aria-hidden="true">{item.icon}</span><span>{item.label}</span>{item.key === "lots" && role === "Admin" ? <span className="nav-count">{viewData.lots.length}</span> : null}{item.key === "my-offers" ? <span className="nav-count">{myOffers.length}</span> : null}</button>)}
         </nav>
         <div className="sidebar-bottom">
           <div className="local-card"><ShieldCheck size={18} /><div><strong>{authSession ? "Supabase connected" : "Local demo only"}</strong><span>{authSession ? "Collector + Recycler actions · Admin workflow RPC" : "Not shared across users or devices"}</span></div></div>
@@ -795,34 +775,34 @@ export default function App() {
             <div className="welcome-actions">{!authSession && <button className="btn btn-light" onClick={exportData}><Download size={16} /> Export data</button>}{role === "Collector" && <button className="btn btn-primary" onClick={() => { setFormError(""); setShowForm(true); }}><Plus size={17} /> {authSession ? "Create Lot" : "Add e-waste lot"}</button>}</div>
           </section>
           <nav className="dashboard-nav" aria-label={`${role} dashboard sections`}>
-            {navigation.map(item => <button key={item.key} className={`dashboard-tab ${currentSection === item.key ? "selected" : ""}`} onClick={() => setSection(item.key)}>{item.icon}{item.label}</button>)}
+            {navigation.map(item => <button key={item.key} type="button" className={`dashboard-tab ${currentSection === item.key ? "selected" : ""}`} aria-current={currentSection === item.key ? "page" : undefined} onClick={() => setSection(item.key)}><span className="dashboard-tab-icon" aria-hidden="true">{item.icon}</span><span>{item.label}</span></button>)}
           </nav>
           <section className="stats-grid">
             {(role === "Collector" ? collectorStats : role === "Recycler" ? recyclerStats : adminStats).map(stat => <StatCard key={stat.label} {...stat} />)}
           </section>
-          {currentSection === "activity" ? <ActivityPanel activity={viewData.activity} workflowEvents={viewData.workflowEvents} lots={viewData.lots} connected={Boolean(authSession)} /> : role === "Collector" ? <CollectorDashboard lots={visibleLots.filter(lot => authSession ? lot.collectorId === authSession.user.id : lot.collector === DEMO_COLLECTOR)} allLotCount={collectorLots.length} query={query} setQuery={setQuery} onAdd={() => setShowForm(true)} onDecision={decideOffer} decisionBusyOfferId={decisionBusyOfferId} readOnly={Boolean(authSession)} /> : role === "Recycler" ? currentSection === "my-offers" ? <RecyclerOffers offers={myOffers} connected={Boolean(authSession)} /> : <RecyclerDashboard lots={visibleLots.filter(lot => ["Open", "Offer submitted"].includes(lot.status))} query={query} setQuery={setQuery} categoryFilter={categoryFilter} setCategoryFilter={setCategoryFilter} locationFilter={locationFilter} setLocationFilter={setLocationFilter} statusFilter={statusFilter} setStatusFilter={setStatusFilter} categories={categories} locations={locations} myOffers={myOffers} currentRecyclerId={authSession?.user?.id} readOnly={Boolean(authSession)} onOffer={lot => { setOfferLot(lot); setOfferPrice(""); setOfferMessage(""); setOfferError(""); }} /> : <AdminDashboard lots={visibleLots} query={query} setQuery={setQuery} statusFilter={statusFilter} setStatusFilter={setStatusFilter} evidenceDrafts={evidenceDrafts} setEvidenceDrafts={setEvidenceDrafts} disputeDrafts={disputeDrafts} setDisputeDrafts={setDisputeDrafts} onTransition={transitionLot} onConnectedTransition={handleAdminTransition} busyLotId={workflowBusyLotId} canManage={Boolean(authSession && profile?.role === "admin")} readOnly={Boolean(authSession)} />}
+          {currentSection === "activity" ? <ActivityPanel activity={viewData.activity} workflowEvents={viewData.workflowEvents} lots={viewData.lots} connected={Boolean(authSession)} ancillaryErrors={connectedData?.ancillaryErrors || []} onRetry={() => setReloadToken(value => value + 1)} retrying={marketplaceState === "loading"} /> : role === "Collector" ? <CollectorDashboard lots={visibleLots.filter(lot => authSession ? lot.collectorId === authSession.user.id : lot.collector === DEMO_COLLECTOR)} allLotCount={collectorLots.length} query={query} setQuery={setQuery} onAdd={() => setShowForm(true)} onDecision={decideOffer} decisionBusyOfferId={decisionBusyOfferId} readOnly={Boolean(authSession)} /> : role === "Recycler" ? currentSection === "my-offers" ? <RecyclerOffers offers={myOffers} connected={Boolean(authSession)} /> : <RecyclerDashboard lots={visibleLots.filter(lot => ["Open", "Offer submitted"].includes(lot.status))} query={query} setQuery={setQuery} categoryFilter={categoryFilter} setCategoryFilter={setCategoryFilter} locationFilter={locationFilter} setLocationFilter={setLocationFilter} statusFilter={statusFilter} setStatusFilter={setStatusFilter} categories={categories} locations={locations} myOffers={myOffers} currentRecyclerId={authSession?.user?.id} readOnly={Boolean(authSession)} onOffer={lot => { setOfferLot(lot); setOfferPrice(""); setOfferMessage(""); setOfferError(""); }} /> : <AdminDashboard lots={visibleLots} query={query} setQuery={setQuery} statusFilter={statusFilter} setStatusFilter={setStatusFilter} evidenceDrafts={evidenceDrafts} setEvidenceDrafts={setEvidenceDrafts} disputeDrafts={disputeDrafts} setDisputeDrafts={setDisputeDrafts} onTransition={transitionLot} onConnectedTransition={handleAdminTransition} busyLotId={workflowBusyLotId} canManage={Boolean(authSession && profile?.role === "admin")} readOnly={Boolean(authSession)} />}
           <footer className="footer"><span>© 2026 Scarap_Yukti · Prototype workspace</span><span>{authSession ? "Supabase reads, Collector lot creation and offer decisions, Recycler offers, and Admin workflow RPC actions." : "Simulated workflow and recycling evidence; no verified recycler service."}</span></footer>
         </div>
       </main>
 
       {notice && <div className={`toast ${noticeType}`} role={noticeType === "error" ? "alert" : "status"}>{noticeType === "error" ? <CircleHelp size={17} /> : <Check size={17} />}<span>{notice}</span><button onClick={() => setNotice("")} aria-label="Dismiss"><X size={16} /></button></div>}
 
-      {showForm && <div className="modal-backdrop" onMouseDown={e => { if (e.target === e.currentTarget && !createBusy) setShowForm(false); }}><div className="modal"><div className="modal-header"><div><span className="eyebrow">NEW RECORD</span><h2>Add e-waste lot</h2><p>{authSession ? "This lot will be saved to the marketplace under your Collector account." : "Enter the details you know. This demo does not verify claims."}</p></div><button className="icon-btn" onClick={() => !createBusy && setShowForm(false)} aria-label="Close"><X size={20} /></button></div>
+      {showForm && <div className="modal-backdrop" onMouseDown={e => { if (e.target === e.currentTarget && !createBusy) setShowForm(false); }}><AccessibleDialog className="modal" labelledBy="create-lot-dialog-title" describedBy="create-lot-dialog-description" busy={createBusy} onClose={() => setShowForm(false)}><div className="modal-header"><div><span className="eyebrow">NEW RECORD</span><h2 id="create-lot-dialog-title">Add e-waste lot</h2><p id="create-lot-dialog-description">{authSession ? "This lot will be saved to the marketplace under your Collector account." : "Enter the details you know. This demo does not verify claims."}</p></div><button type="button" className="icon-btn" onClick={() => !createBusy && setShowForm(false)} aria-label="Close dialog"><X size={20} /></button></div>
         <form onSubmit={createLot} className="form-grid">
-          <label className="full">Lot name<input required maxLength="100" value={form.title} onChange={e => { setForm({ ...form, title: e.target.value }); setFormError(""); }} placeholder="e.g. Used laptop batch" /></label>
+          <label className="full">Lot name<input data-dialog-initial-focus="true" required maxLength="100" value={form.title} onChange={e => { setForm({ ...form, title: e.target.value }); setFormError(""); }} placeholder="e.g. Used laptop batch" /></label>
           <label>Category<select value={form.category} onChange={e => setForm({ ...form, category: e.target.value })}><option>Computers</option><option>Displays</option><option>Small electronics</option><option>Phones and tablets</option><option>Batteries</option><option>Mixed e-waste</option><option>Other</option></select></label>
           <label>Estimated weight (kg)<input type="number" min="0.1" max="100000" step="0.1" required value={form.weight} onChange={e => { setForm({ ...form, weight: e.target.value }); setFormError(""); }} placeholder="e.g. 18.5" /></label>
-          <label className="full">Pickup location<input required minLength="2" maxLength="160" value={form.location} onChange={e => { setForm({ ...form, location: e.target.value }); setFormError(""); }} placeholder="Area, city" /></label>
-          <label className="full">Notes (optional)<textarea rows="3" maxLength="500" value={form.notes} onChange={e => { setForm({ ...form, notes: e.target.value }); setFormError(""); }} placeholder="Condition, items included, preferred pickup time..." /></label>
+          <label className="full">Approximate pickup area<input required minLength="2" maxLength="160" value={form.location} onChange={e => { setForm({ ...form, location: e.target.value }); setFormError(""); }} placeholder="Area, city" /></label>
+          <label className="full">Notes (optional)<textarea rows="3" maxLength="500" value={form.notes} onChange={e => { setForm({ ...form, notes: e.target.value }); setFormError(""); }} placeholder="Condition and items included..." /></label>
           {formError && <div className="form-error full" role="alert">{formError}</div>}
-          <div className="form-note full"><ShieldCheck size={16} /> {authSession ? "Saved using your signed-in session. Database row-level security checks that you are a Collector and assigns ownership to your account." : "This record stays in this browser. It is not shared with other users or devices."}</div>
+          <div className="form-note full"><ShieldCheck size={16} /><span>{authSession ? "Saved using your signed-in session. Database row-level security checks that you are a Collector and assigns ownership to your account." : "This record stays in this browser. It is not shared with other users or devices."}<br /><strong>Privacy:</strong> Recyclers who can view this lot can see its location and notes. Use an approximate area/city only; never enter an exact home address, phone number, or other private contact details.</span></div>
           <div className="modal-actions full"><button type="button" className="btn btn-light" onClick={() => !createBusy && setShowForm(false)} disabled={createBusy}>Cancel</button><button className="btn btn-primary" type="submit" disabled={createBusy}><Plus size={16} /> {createBusy ? "Saving…" : authSession ? "Create lot" : "Save lot"}</button></div>
         </form>
-      </div></div>}
+      </AccessibleDialog></div>}
 
-      {offerLot && <div className="modal-backdrop" onMouseDown={e => { if (e.target === e.currentTarget && !offerBusy) setOfferLot(null); }}><div className="modal modal-narrow"><div className="modal-header"><div><span className="eyebrow">{authSession ? "SUPABASE OFFER" : "DEMO OFFER"}</span><h2>Make an offer</h2><p>{offerLot.title} · {offerLot.id} · {offerLot.weight} kg</p></div><button className="icon-btn" onClick={() => !offerBusy && setOfferLot(null)} aria-label="Close"><X size={20} /></button></div>
-        <form onSubmit={submitOffer} className="form-grid"><label className="full">Offer amount (₹)<input type="number" min="0.01" max="1000000000" step="0.01" required value={offerPrice} onChange={e => { setOfferPrice(e.target.value); setOfferError(""); }} placeholder={authSession ? "Enter your offer amount" : "Enter a demo amount"} /></label><label className="full">Message (optional)<textarea rows="3" maxLength="500" value={offerMessage} onChange={e => { setOfferMessage(e.target.value); setOfferError(""); }} placeholder="Pickup terms or inspection notes" /></label>{offerError && <div className="form-error full" role="alert">{offerError}</div>}<div className="form-note full">{authSession ? "Your offer is sent using your signed-in Recycler account and checked by database RLS." : "This simulated offer is saved only in this browser. It is not a live market quote or payment commitment."}</div><div className="modal-actions full"><button type="button" className="btn btn-light" onClick={() => !offerBusy && setOfferLot(null)} disabled={offerBusy}>Cancel</button><button className="btn btn-primary" type="submit" disabled={offerBusy}>{offerBusy ? "Submitting…" : authSession ? "Submit offer" : "Submit demo offer"}</button></div></form>
-      </div></div>}
+      {offerLot && <div className="modal-backdrop" onMouseDown={e => { if (e.target === e.currentTarget && !offerBusy) setOfferLot(null); }}><AccessibleDialog className="modal modal-narrow" labelledBy="offer-dialog-title" describedBy="offer-dialog-description" busy={offerBusy} onClose={() => setOfferLot(null)}><div className="modal-header"><div><span className="eyebrow">{authSession ? "SUPABASE OFFER" : "DEMO OFFER"}</span><h2 id="offer-dialog-title">Make an offer</h2><p id="offer-dialog-description">{offerLot.title} · {offerLot.id} · {offerLot.weight} kg</p></div><button type="button" className="icon-btn" onClick={() => !offerBusy && setOfferLot(null)} aria-label="Close dialog"><X size={20} /></button></div>
+        <form onSubmit={submitOffer} className="form-grid"><label className="full">Offer amount (₹)<input data-dialog-initial-focus="true" type="number" min="0.01" max="1000000000" step="0.01" required value={offerPrice} onChange={e => { setOfferPrice(e.target.value); setOfferError(""); }} placeholder={authSession ? "Enter your offer amount" : "Enter a demo amount"} /></label><label className="full">Message (optional)<textarea rows="3" maxLength="500" value={offerMessage} onChange={e => { setOfferMessage(e.target.value); setOfferError(""); }} placeholder="Pickup terms or inspection notes" /></label>{offerError && <div className="form-error full" role="alert">{offerError}</div>}<div className="form-note full">{authSession ? "Your offer is sent using your signed-in Recycler account and checked by database RLS." : "This simulated offer is saved only in this browser. It is not a live market quote or payment commitment."}</div><div className="modal-actions full"><button type="button" className="btn btn-light" onClick={() => !offerBusy && setOfferLot(null)} disabled={offerBusy}>Cancel</button><button className="btn btn-primary" type="submit" disabled={offerBusy}>{offerBusy ? "Submitting…" : authSession ? "Submit offer" : "Submit demo offer"}</button></div></form>
+      </AccessibleDialog></div>}
     </div>
   );
 }
@@ -867,16 +847,77 @@ function AuthPanel({ configured, session, profile, mode, setMode, form, setForm,
   </section>;
 }
 
-function ActivityPanel({ activity, workflowEvents = [], lots = [], connected = false }) {
+function AccessibleDialog({ children, className, labelledBy, describedBy, busy, onClose }) {
+  const dialogRef = useRef(null);
+  const closeRef = useRef(onClose);
+  const busyRef = useRef(busy);
+  closeRef.current = onClose;
+  busyRef.current = busy;
+
+  useEffect(() => {
+    const dialog = dialogRef.current;
+    const previouslyFocused = document.activeElement;
+    if (!dialog) return undefined;
+
+    const focusableElements = () => [...dialog.querySelectorAll(
+      'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+    )].filter(element => element.getClientRects().length > 0 && element.getAttribute("aria-hidden") !== "true");
+
+    const initialFocus = dialog.querySelector("[data-dialog-initial-focus]") || focusableElements()[0] || dialog;
+    initialFocus.focus();
+
+    function handleKeyDown(event) {
+      if (event.key === "Escape") {
+        if (!busyRef.current) {
+          event.preventDefault();
+          closeRef.current();
+        }
+        return;
+      }
+
+      if (event.key !== "Tab") return;
+      const focusable = focusableElements();
+      if (!focusable.length) {
+        event.preventDefault();
+        dialog.focus();
+        return;
+      }
+
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && (document.activeElement === first || !dialog.contains(document.activeElement))) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && (document.activeElement === last || !dialog.contains(document.activeElement))) {
+        event.preventDefault();
+        first.focus();
+      }
+    }
+
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("keydown", handleKeyDown);
+      if (previouslyFocused?.isConnected) previouslyFocused.focus();
+    };
+  }, []);
+
+  return <div ref={dialogRef} className={className} role="dialog" aria-modal="true" aria-labelledby={labelledBy} aria-describedby={describedBy} tabIndex={-1}>{children}</div>;
+}
+
+function ActivityPanel({ activity, workflowEvents = [], lots = [], connected = false, ancillaryErrors = [], onRetry, retrying = false }) {
   const lotNames = new Map(lots.map(lot => [lot.id, lot.title]));
+  const activityUnavailable = ancillaryErrors.includes("activity");
+  const workflowUnavailable = ancillaryErrors.includes("workflow");
+  const unavailableLabels = [activityUnavailable && "activity history", workflowUnavailable && "workflow events"].filter(Boolean);
   return <section className="panel activity-panel dashboard-panel">
     <div className="panel-heading"><div><h2>{connected ? "Marketplace history" : "Recent activity"}</h2><p>{connected ? "Read-only history returned by your Supabase RLS policies." : "Local demo workflow history."}</p></div><Activity size={19} className="muted-icon" /></div>
+    {connected && unavailableLabels.length > 0 && <div className="inline-hint history-read-warning" role="status"><span>Marketplace lots and offers loaded, but {unavailableLabels.join(" and ")} could not be loaded.</span><button type="button" className="btn btn-light btn-small" onClick={onRetry} disabled={retrying}>{retrying ? "Retrying…" : "Retry history"}</button></div>}
     <div className="history-columns">
       <div><h3>{connected ? "Activity history" : "Activity"}</h3>
-        {activity.length ? <div className="activity-list">{activity.slice(0, 20).map((item, i) => <div className="activity-item" key={item.id}><div className={`activity-marker marker-${i % 3}`}><Check size={14} /></div><div className="activity-copy"><strong>{item.text}</strong><span>{item.time}{item.lotId ? ` · ${lotNames.get(item.lotId) || "Marketplace lot"}` : ""}</span></div></div>)}</div> : <EmptyState title="No activity yet" detail={connected ? "No activity-history rows are visible for this account." : "Actions in this local demo will appear here."} />}
+        {activity.length ? <div className="activity-list">{activity.slice(0, 20).map((item, i) => <div className="activity-item" key={item.id}><div className={`activity-marker marker-${i % 3}`}><Check size={14} /></div><div className="activity-copy"><strong>{item.text}</strong><span>{item.time}{item.lotId ? ` · ${lotNames.get(item.lotId) || "Marketplace lot"}` : ""}</span></div></div>)}</div> : <EmptyState title={activityUnavailable ? "Activity history unavailable" : "No activity yet"} detail={activityUnavailable ? "The activity query failed. Retry to check again." : connected ? "No activity-history rows are visible for this account." : "Actions in this local demo will appear here."} />}
       </div>
       {connected && <div><h3>Workflow events</h3>
-        {workflowEvents.length ? <div className="activity-list">{workflowEvents.slice(0, 20).map((item, i) => <div className="activity-item" key={item.id}><div className={`activity-marker marker-${i % 3}`}><Package size={14} /></div><div className="activity-copy"><strong>{item.fromStatus ? `${item.fromStatus} → ${item.toStatus}` : item.toStatus} · {item.eventType}</strong><span>{item.note || "No event note"}{item.lotId ? ` · ${lotNames.get(item.lotId) || "Marketplace lot"}` : ""} · {item.time}</span></div></div>)}</div> : <EmptyState title="No workflow events yet" detail="No workflow-event rows are visible for this account." />}
+        {workflowEvents.length ? <div className="activity-list">{workflowEvents.slice(0, 20).map((item, i) => <div className="activity-item" key={item.id}><div className={`activity-marker marker-${i % 3}`}><Package size={14} /></div><div className="activity-copy"><strong>{item.fromStatus ? `${statusLabel(item.fromStatus)} → ${statusLabel(item.toStatus)}` : statusLabel(item.toStatus)} · {item.eventType}</strong><span>{item.note || "No event note"}{item.lotId ? ` · ${lotNames.get(item.lotId) || "Marketplace lot"}` : ""} · {item.time}</span></div></div>)}</div> : <EmptyState title={workflowUnavailable ? "Workflow history unavailable" : "No workflow events yet"} detail={workflowUnavailable ? "The workflow-history query failed. Retry to check again." : "No workflow-event rows are visible for this account."} />}
       </div>}
     </div>
   </section>;
@@ -887,7 +928,7 @@ function LotFilters({ query, setQuery, statusFilter, setStatusFilter, categories
     <div className="search-box"><Search size={17} /><input value={query} onChange={e => setQuery(e.target.value)} placeholder="Search lot, category or location..." aria-label="Search lots" /></div>
     {includeCategory && <div className="filter-select"><Filter size={16} /><select aria-label="Filter by category" value={categoryFilter} onChange={e => setCategoryFilter(e.target.value)}><option>All categories</option>{categories.map(item => <option key={item}>{item}</option>)}</select></div>}
     {includeLocation && <div className="filter-select"><MapPin size={15} /><select aria-label="Filter by location" value={locationFilter} onChange={e => setLocationFilter(e.target.value)}><option>All locations</option>{locations.map(item => <option key={item}>{item}</option>)}</select></div>}
-    <div className="filter-select"><Filter size={16} /><select aria-label="Filter by status" value={statusFilter} onChange={e => setStatusFilter(e.target.value)}><option>All statuses</option>{statusOptions.map(item => <option key={item}>{item}</option>)}</select></div>
+    <div className="filter-select"><Filter size={16} /><select aria-label="Filter by status" value={statusFilter} onChange={e => setStatusFilter(e.target.value)}><option>All statuses</option>{statusOptions.map(item => <option key={item} value={item}>{statusLabel(item)}</option>)}</select></div>
   </div>;
 }
 
@@ -896,24 +937,25 @@ function CollectorDashboard({ lots, allLotCount, query, setQuery, onAdd, onDecis
     <div className="filters role-filters"><div className="search-box"><Search size={17} /><input value={query} onChange={e => setQuery(e.target.value)} placeholder="Search my lots..." aria-label="Search my lots" /></div><span className="filters-note">Showing {lots.length} of {allLotCount} lots</span></div>
     {lots.length ? <div className="lot-card-list">{lots.map(lot => <article className="workflow-card" key={lot.id}>
       <LotHeading lot={lot} />
-      <div className="lot-meta-grid"><span><strong>{lot.weight} kg</strong><small>Estimated weight</small></span><span><MapPin size={14} /> {lot.location}<small>Pickup location</small></span><span><strong>{shortDate(lot.date)}</strong><small>Created</small></span></div>
+      <div className="lot-meta-grid"><span><strong>{lot.weight} kg</strong><small>Estimated weight</small></span><span><MapPin size={14} /> {lot.location}<small>Approximate pickup area</small></span><span><strong>{shortDate(lot.date)}</strong><small>Created</small></span></div>
       {lot.notes && <p className="lot-notes">{lot.notes}</p>}
-      <div className="workflow-progress"><span>Pickup and recycling status</span><strong>{lot.status}</strong><ProgressTrack status={lot.status} /></div>
+      <div className="workflow-progress"><span>Pickup and recycling status</span><strong>{statusLabel(lot.status)}</strong><ProgressTrack status={lot.status} /></div>
       {lot.status === "Recycling review" && lot.evidence && <div className="evidence-note"><ShieldCheck size={15} /><div><strong>{readOnly ? "Evidence/review note · not independently verified" : "Demo evidence submitted"}</strong><span>{lot.evidence}</span></div></div>}
       <div className="offers-heading"><strong>Offers received ({lot.offers.length})</strong><span>Compare amounts and terms before deciding</span></div>
-      {lot.offers.length ? <div className="offer-grid">{lot.offers.slice().sort((a, b) => b.price - a.price).map(offer => <article className={`offer-card ${offer.status}`} key={offer.id}><div className="offer-card-top"><strong>{offer.recycler}</strong><OfferStatusPill status={offer.status} /></div><div className="offer-price">{money(offer.price)}</div><p>{offer.message || "No message provided."}</p>{offer.status === "pending" && lot.status === "Offer submitted" ? <div className="offer-actions"><button className="btn btn-light btn-small" disabled={Boolean(decisionBusyOfferId)} onClick={() => onDecision(lot.id, offer.id, "rejected")}>{decisionBusyOfferId === offer.id ? "Saving…" : "Reject"}</button><button className="btn btn-primary btn-small" disabled={Boolean(decisionBusyOfferId)} onClick={() => onDecision(lot.id, offer.id, "accepted")}>{decisionBusyOfferId === offer.id ? "Saving…" : "Accept & schedule pickup"}</button></div> : null}</article>)}</div> : <EmptyState title="No offers yet" detail="Recycler offers will appear here for comparison." compact />}
+      {lot.offers.length ? <div className="offer-grid">{lot.offers.slice().sort((a, b) => b.price - a.price).map(offer => <article className={`offer-card ${offer.status}`} key={offer.id}><div className="offer-card-top"><strong>{offer.recycler}</strong><OfferStatusPill status={offer.status} /></div><div className="offer-price">{money(offer.price)}</div><p>{offer.message || "No message provided."}</p>{offer.status === "pending" && lot.status === "Offer submitted" ? <div className="offer-actions"><button className="btn btn-light btn-small" disabled={Boolean(decisionBusyOfferId)} onClick={() => onDecision(lot.id, offer.id, "rejected")}>{decisionBusyOfferId === offer.id ? "Saving…" : "Reject"}</button><button className="btn btn-primary btn-small" disabled={Boolean(decisionBusyOfferId)} onClick={() => onDecision(lot.id, offer.id, "accepted")}>{decisionBusyOfferId === offer.id ? "Saving…" : "Accept offer"}</button></div> : null}</article>)}</div> : <EmptyState title="No offers yet" detail="Recycler offers will appear here for comparison." compact />}
     </article>)}</div> : <EmptyState title={query ? "No matching lots" : "No lots available"} detail={query ? "Try a different search." : readOnly ? "This account has no visible lots yet." : "Create a lot to start your demo workflow."} action={!query ? <button className="btn btn-primary" onClick={onAdd}><Plus size={16} /> {readOnly ? "Create Lot" : "Create first lot"}</button> : null} />}
   </section>;
 }
 
 function RecyclerDashboard({ lots, query, setQuery, categoryFilter, setCategoryFilter, locationFilter, setLocationFilter, statusFilter, setStatusFilter, categories, locations, myOffers, currentRecyclerId, readOnly = false, onOffer }) {
   return <section className="panel dashboard-panel"><div className="panel-heading"><div><h2>Available lots</h2><p>{readOnly ? "Browse lots visible to your account and submit one offer per lot." : "Browse open lots and submit one offer per lot as the demo recycler."}</p></div><span className={readOnly ? "connected-label" : "demo-label"}>{readOnly ? "CONNECTED RECYCLER" : "DEMO RECYCLER"}</span></div>
+    <div className="inline-hint"><ShieldCheck size={15} /> Lot locations and notes are listing details, not private contact fields. After an offer is accepted, pickup must be coordinated separately; this app does not schedule or confirm an appointment.</div>
     {readOnly && <div className="inline-hint"><ShieldCheck size={15} /> Offer rows follow the database policy: recyclers can see their own offers; offers on lots they do not own may not be visible.</div>}
     <LotFilters query={query} setQuery={setQuery} statusFilter={statusFilter} setStatusFilter={setStatusFilter} categories={categories} categoryFilter={categoryFilter} setCategoryFilter={setCategoryFilter} locations={locations} locationFilter={locationFilter} setLocationFilter={setLocationFilter} includeCategory includeLocation />
     {lots.length ? <div className="lot-card-list">{lots.map(lot => { const submitted = lot.offers.find(offer => currentRecyclerId ? offer.recyclerId === currentRecyclerId : offer.recycler === DEMO_RECYCLER); return <article className="workflow-card recycler-lot" key={lot.id}>
       <LotHeading lot={lot} />
       <p className="lot-notes">{lot.notes || "No additional lot notes provided."}</p>
-      <div className="lot-meta-grid"><span><strong>{lot.weight} kg</strong><small>Estimated weight</small></span><span><MapPin size={14} /> {lot.location}<small>Pickup location</small></span><span><strong>{lot.offers.filter(offer => currentRecyclerId ? offer.recyclerId !== currentRecyclerId : offer.recycler !== DEMO_RECYCLER).length}</strong><small>{readOnly ? "Other visible offers" : "Other offers"}</small></span></div>
+      <div className="lot-meta-grid"><span><strong>{lot.weight} kg</strong><small>Estimated weight</small></span><span><MapPin size={14} /> {lot.location}<small>Approximate pickup area</small></span><span><strong>{lot.offers.filter(offer => currentRecyclerId ? offer.recyclerId !== currentRecyclerId : offer.recycler !== DEMO_RECYCLER).length}</strong><small>{readOnly ? "Other visible offers" : "Other offers"}</small></span></div>
       <div className="recycler-card-action">{submitted ? <><span>Your offer: <strong>{money(submitted.price)}</strong></span><OfferStatusPill status={submitted.status} /></> : <button className="btn btn-primary" onClick={() => onOffer(lot)}><Wallet size={15} /> {readOnly ? "Submit offer" : "Submit demo offer"}</button>}</div>
     </article>; })}</div> : <EmptyState title="No available lots match" detail="Change the category, location, status, or search filters." />}
     {myOffers.length > 0 && <div className="inline-hint"><Activity size={15} /> Your {myOffers.length} submitted {myOffers.length === 1 ? "offer is" : "offers are"} tracked in the My offers section.</div>}
@@ -941,7 +983,7 @@ function AdminDashboard({ lots, query, setQuery, statusFilter, setStatusFilter, 
       <LotHeading lot={lot} /><div className="admin-lot-topline"><span>Collector: {lot.collector || DEMO_COLLECTOR}</span><span>{lot.weight} kg · {lot.location}</span></div>
       <ProgressTrack status={lot.status} />
       <div className="admin-offers"><strong>Offers ({lot.offers.length})</strong>{lot.offers.length ? lot.offers.map(offer => <div className="admin-offer-row" key={offer.id}><span><strong>{offer.recycler}</strong><small>{offer.message}</small></span><b>{money(offer.price)}</b><OfferStatusPill status={offer.status} /></div>) : <p>No offers submitted.</p>}</div>
-      {(!readOnly || canManage) && lot.status === "Pickup scheduled" && <div className="admin-action-row"><span>{readOnly ? "Confirm the pickup handover." : "Pickup handover is ready for a demo status update."}</span><button className="btn btn-light btn-small" disabled={disabled(lot.id)} onClick={() => runTransition(lot.id, "collected", "Collected")}>{busy(lot.id) ? "Saving…" : "Mark collected"}</button></div>}
+      {(!readOnly || canManage) && lot.status === "Pickup scheduled" && <div className="admin-action-row"><span>{readOnly ? "Coordinate pickup separately; mark collected only after handover has happened." : "No appointment is scheduled by this demo. Record collection only after the demo handover."}</span><button className="btn btn-light btn-small" disabled={disabled(lot.id)} onClick={() => runTransition(lot.id, "collected", "Collected")}>{busy(lot.id) ? "Saving…" : "Mark collected"}</button></div>}
       {(!readOnly || canManage) && lot.status === "Collected" && <div className="evidence-entry"><label>{readOnly ? "Evidence / review note (10–500 characters)" : "Demo recycling evidence / review notes"}<textarea rows="2" minLength="10" maxLength="500" value={evidenceDrafts[lot.id] || ""} onChange={e => setEvidenceDrafts(prev => ({ ...prev, [lot.id]: e.target.value }))} placeholder="Describe the evidence or review note" /></label><button className="btn btn-primary btn-small" disabled={disabled(lot.id)} onClick={() => runTransition(lot.id, "recycling_review", "Recycling review", evidenceDrafts[lot.id] || "")}>{busy(lot.id) ? "Saving…" : "Submit for recycling review"}</button></div>}
       {lot.status === "Recycling review" && <div className="evidence-note"><ShieldCheck size={15} /><div><strong>{readOnly ? "Evidence/review note · not independently verified" : "Evidence note on file · demo only"}</strong><span>{lot.evidence}</span></div>{(!readOnly || canManage) && <button className="btn btn-primary btn-small" disabled={disabled(lot.id)} onClick={() => runTransition(lot.id, "recycled", "Recycled")}>{busy(lot.id) ? "Saving…" : "Mark recycled"}</button>}</div>}
       {(!readOnly || canManage) && lot.status === "Recycled" && <div className="completed-note"><Check size={15} /> {readOnly ? "Marked recycled in the database workflow." : "Marked recycled in local demo · this is not independently verified."}</div>}
@@ -958,7 +1000,7 @@ function LotHeading({ lot }) {
 function ProgressTrack({ status }) {
   const stages = ["Open", "Offer submitted", "Pickup scheduled", "Collected", "Recycling review", "Recycled"];
   const index = stages.indexOf(status);
-  return <div className="progress-track" aria-label={`Workflow status: ${status}`}>{stages.map((stage, i) => <span className={i <= index ? "done" : ""} key={stage} title={stage}></span>)}</div>;
+  return <div className="progress-track" aria-label={`Workflow status: ${statusLabel(status)}`}>{stages.map((stage, i) => <span className={i <= index ? "done" : ""} key={stage} title={statusLabel(stage)}></span>)}</div>;
 }
 
 function OfferStatusPill({ status }) {
@@ -975,5 +1017,9 @@ function StatCard({ label, value, note, icon, tone }) {
 }
 function StatusPill({ status }) {
   const cls = status.toLowerCase().replaceAll(" ", "-");
-  return <span className={`status-pill ${cls}`}><span></span>{status}</span>;
+  return <span className={`status-pill ${cls}`}><span></span>{statusLabel(status)}</span>;
+}
+
+function statusLabel(status) {
+  return status === "Pickup scheduled" ? "Accepted - coordinate pickup" : status;
 }

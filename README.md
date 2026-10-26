@@ -93,6 +93,22 @@ npm run preview
 
 Vite writes the production site to `dist/`.
 
+## Tests
+
+Run the full automated test suite with:
+
+```bash
+npm test
+```
+
+Run only the security contract checks with:
+
+```bash
+npm run test:security
+```
+
+These local tests cover shared demo workflow logic and check expected frontend/migration contracts. They do not execute database policies or verify the live Supabase project.
+
 ## Deploy to Vercel
 
 1. Import the GitHub repository into Vercel.
@@ -106,4 +122,4 @@ Vite writes the production site to `dist/`.
 - The Admin evidence/review note is text recorded in the database. It does not independently prove that pickup or physical recycling occurred.
 - The app does not verify Collector or Recycler identity/business licenses, arrange physical pickup, process payments, or certify recycling.
 - Connected behavior depends on the Supabase project having the expected migrations, RLS policies, RPCs, and Auth URL configuration. This README does not independently verify current hosted settings.
-- No automated test script is configured in `package.json`; use the build command and manually test the connected workflow.
+- The automated tests do not replace browser testing or authorization checks against the deployed Supabase project; manually test the connected workflow and database permissions before a pilot.

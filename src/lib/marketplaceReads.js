@@ -1,4 +1,5 @@
 import { supabase } from "./supabase.js";
+import { collectAncillaryReadResults } from "./marketplaceReadResults.js";
 
 const statusLabels = {
   open: "Open",
@@ -28,7 +29,7 @@ function displayDate(value) {
 export async function loadMarketplaceSnapshot() {
   if (!supabase) throw new Error("Supabase is not configured. Add the project URL and publishable key to .env.local.");
 
-  const [lotsResult, offersResult, activityResult, eventsResult] = await Promise.all([
+  const [lotsResult, offersResult, ancillaryResults] = await Promise.all([
     supabase
       .from("lots")
       .select("id, collector_id, title, category, weight_kg, location, notes, status, evidence_note, created_at, updated_at")
@@ -37,20 +38,27 @@ export async function loadMarketplaceSnapshot() {
       .from("offers")
       .select("id, lot_id, recycler_id, amount, message, status, created_at")
       .order("created_at", { ascending: false }),
-    supabase
-      .from("activity_history")
-      .select("id, lot_id, actor_id, event_type, summary, created_at")
-      .order("created_at", { ascending: false })
-      .limit(100),
-    supabase
-      .from("workflow_events")
-      .select("id, lot_id, actor_id, from_status, to_status, event_type, note, created_at")
-      .order("created_at", { ascending: false })
-      .limit(100)
+    Promise.allSettled([
+      supabase
+        .from("activity_history")
+        .select("id, lot_id, actor_id, event_type, summary, created_at")
+        .order("created_at", { ascending: false })
+        .limit(100),
+      supabase
+        .from("workflow_events")
+        .select("id, lot_id, actor_id, from_status, to_status, event_type, note, created_at")
+        .order("created_at", { ascending: false })
+        .limit(100)
+    ])
   ]);
 
-  const failedQuery = [lotsResult, offersResult, activityResult, eventsResult].find(result => result.error);
+  const failedQuery = [lotsResult, offersResult].find(result => result.error);
   if (failedQuery) throw failedQuery.error;
+  if (!Array.isArray(lotsResult.data) || !Array.isArray(offersResult.data)) {
+    throw new Error("Could not load marketplace data: the database returned an invalid lots or offers response.");
+  }
+
+  const { activityRows, workflowRows, ancillaryErrors } = collectAncillaryReadResults(...ancillaryResults);
 
   const lotRows = lotsResult.data || [];
   const offerRows = offersResult.data || [];
@@ -106,7 +114,7 @@ export async function loadMarketplaceSnapshot() {
     offers: offersByLot.get(lot.id) || []
   }));
 
-  const activity = (activityResult.data || []).map(item => ({
+  const activity = activityRows.map(item => ({
     id: item.id,
     text: item.summary,
     time: displayTime(item.created_at),
@@ -114,7 +122,7 @@ export async function loadMarketplaceSnapshot() {
     eventType: item.event_type
   }));
 
-  const workflowEvents = (eventsResult.data || []).map(item => ({
+  const workflowEvents = workflowRows.map(item => ({
     id: item.id,
     lotId: item.lot_id,
     actorId: item.actor_id,
@@ -125,5 +133,5 @@ export async function loadMarketplaceSnapshot() {
     time: displayTime(item.created_at)
   }));
 
-  return { lots, activity, workflowEvents };
+  return { lots, activity, workflowEvents, ancillaryErrors };
 }
