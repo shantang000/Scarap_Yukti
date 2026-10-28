@@ -52,7 +52,10 @@ export async function loadMarketplaceSnapshot() {
       supabase
         .from("pickup_appointments")
         .select("id, lot_id, offer_id, scheduled_at, status, proposed_note, response_note, proposed_by, responded_by, created_at, updated_at")
-        .order("created_at", { ascending: false })
+        .order("created_at", { ascending: false }),
+      supabase
+        .from("lots")
+        .select("id, actual_weight_kg, weight_discrepancy_pct")
     ])
   ]);
 
@@ -62,7 +65,7 @@ export async function loadMarketplaceSnapshot() {
     throw new Error("Could not load marketplace data: the database returned an invalid lots or offers response.");
   }
 
-  const { activityRows, workflowRows, pickupAppointmentRows, ancillaryErrors } = collectAncillaryReadResults(...ancillaryResults);
+  const { activityRows, workflowRows, pickupAppointmentRows, traceabilityRows, ancillaryErrors } = collectAncillaryReadResults(...ancillaryResults);
 
   const lotRows = lotsResult.data || [];
   const offerRows = offersResult.data || [];
@@ -87,6 +90,7 @@ export async function loadMarketplaceSnapshot() {
   }
 
   const namesById = new Map(profileRows.map(profile => [profile.id, profile.display_name || "Marketplace user"]));
+  const traceabilityByLot = new Map(traceabilityRows.map(row => [row.id, row]));
   const offersByLot = new Map();
   for (const offer of offerRows) {
     const lotOffers = offersByLot.get(offer.lot_id) || [];
@@ -110,6 +114,8 @@ export async function loadMarketplaceSnapshot() {
     title: lot.title,
     category: lot.category,
     weight: Number(lot.weight_kg),
+    actualWeight: traceabilityByLot.get(lot.id)?.actual_weight_kg == null ? null : Number(traceabilityByLot.get(lot.id).actual_weight_kg),
+    discrepancyPct: traceabilityByLot.get(lot.id)?.weight_discrepancy_pct == null ? null : Number(traceabilityByLot.get(lot.id).weight_discrepancy_pct),
     location: lot.location,
     date: displayDate(lot.created_at),
     status: displayStatus(lot.status),

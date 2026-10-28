@@ -247,3 +247,5 @@ button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-vis
 @keyframes mesh-float-b{from{transform:translate3d(1.2%,-1%,0) scale(1.02)}to{transform:translate3d(-1.2%,1%,0) scale(1)}}
 @media(max-width:850px){.app-shell>.ambient-mesh{inset:-4% 0 58px 0}}
 @media(prefers-reduced-motion:reduce){.ambient-mesh span,.ambient-mesh span+span{animation:none;transform:none;will-change:auto}}
+/* Optional handover weight and dispute actions from the traceability follow-up. */
+.trace-actions{display:grid;gap:10px;margin-top:12px}.inline-hint.warning{border-color:#f59e0b;background:#fffbeb;color:#92400e}

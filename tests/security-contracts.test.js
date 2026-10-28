@@ -16,7 +16,7 @@ const privacyMigration = readFileSync(
   "utf8"
 );
 const pickupMigration = readFileSync(
-  resolve(root, "supabase/migrations/20261027000000_pickup_appointment_coordination.sql"),
+  resolve(root, "supabase/migrations/20261028000000_pickup_appointment_coordination.sql"),
   "utf8"
 );
 

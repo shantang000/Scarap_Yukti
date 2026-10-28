@@ -12,6 +12,7 @@ Scarap_Yukti is built with React, Vite, and Supabase. It provides separate Colle
 - **Collector:** create e-waste lots, view incoming Recycler offers, and accept or reject pending offers for owned lots.
 - **Recycler:** browse available lots and submit an offer. The database permits one offer per Recycler per lot.
 - **Admin:** monitor marketplace records and advance allowed workflow steps through a database RPC.
+- **Traceability (optional follow-up migration):** the accepted Recycler can record handover weight; a discrepancy above 10% is flagged for Admin review. The lot-owning Collector or accepted Recycler can raise a dispute. These records do not independently verify a physical handover or recycling outcome.
 - **Pickup coordination (follow-up migration required):** the lot-owning Collector can propose a time after accepting an offer; the accepted Recycler can confirm it or request another time. This records an agreement, not a guaranteed pickup or completed handover.
 - **Workflow history:** track offer decisions, pickup scheduling, collection, recycling review, and recycled status.
 - **Authentication:** sign up, sign in, sign out, and recover a password with Supabase Auth. The dashboard role is read from the user's database profile.
@@ -62,11 +63,12 @@ The migrations in `supabase/migrations/` are intended to be applied in this orde
 
 1. `20261023000000_marketplace_schema_and_rls.sql` — marketplace tables, constraints, RLS policies, triggers, and workflow RPCs.
 2. `20261025000000_profile_privacy_lookup.sql` — own-profile read policy and the limited marketplace participant-name lookup function.
-3. `20261027000000_pickup_appointment_coordination.sql` — optional follow-up for proposed/confirmed pickup times and appointment reads by the lot participants and Admins.
+3. `20261027000000_traceability_hardening.sql` — optional follow-up adding handover-weight recording and participant dispute RPCs.
+4. `20261028000000_pickup_appointment_coordination.sql` — optional follow-up for proposed/confirmed pickup times and appointment reads by the lot participants and Admins.
 
 These are schema migrations, not scripts to rerun casually. Before applying them to an existing Supabase project, check its migration history and actual schema. The project owner reports that both have already been applied to the current project; do not reapply them there. For a fresh project, review the SQL and test it on a disposable database before applying it to a main project. This repository and its build do not run SQL against Supabase.
 
-The pickup coordination migration is new and has **not** been applied by this project change. Review and test it on a disposable database first. Apply it manually only after checking the current database and migration history; do not rerun the first two migrations. Until the follow-up migration is applied and its table is readable under RLS, the core lots/offers screens remain usable but pickup time coordination will be unavailable.
+The traceability and pickup coordination migrations are optional follow-ups and are not applied by this repository or its build. Review and test each on a disposable database first. Apply them manually only after checking the target database's actual schema and migration history; do not rerun migrations already applied. Until the traceability migration is applied, handover-weight fields and its RPC actions are unavailable; the app keeps core lot/offer reads usable. Until the pickup coordination migration is applied and its table is readable under RLS, pickup time coordination is unavailable.
 
 ### Live marketplace updates
 

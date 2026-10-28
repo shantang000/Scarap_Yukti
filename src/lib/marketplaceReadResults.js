@@ -14,18 +14,22 @@ function rowsFromSettledResult(result, source, errors) {
 }
 
 // History is useful context, but a history read failure must not hide lots/offers.
-export function collectAncillaryReadResults(activityResult, workflowResult, pickupAppointmentsResult) {
+export function collectAncillaryReadResults(activityResult, workflowResult, pickupAppointmentsResult, traceabilityResult) {
   const errors = [];
   const activityRows = rowsFromSettledResult(activityResult, "activity", errors);
   const workflowRows = rowsFromSettledResult(workflowResult, "workflow", errors);
   const pickupAppointmentRows = pickupAppointmentsResult === undefined
     ? []
     : rowsFromSettledResult(pickupAppointmentsResult, "pickup_appointments", errors);
+  const traceabilityRows = traceabilityResult === undefined
+    ? []
+    : rowsFromSettledResult(traceabilityResult, "traceability", errors);
 
   return {
     activityRows,
     workflowRows,
     pickupAppointmentRows,
+    traceabilityRows,
     ancillaryErrors: errors
   };
 }

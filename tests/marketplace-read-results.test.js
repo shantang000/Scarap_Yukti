@@ -14,6 +14,7 @@ test("ancillary history results retain rows when both queries succeed", () => {
     activityRows: activity,
     workflowRows: workflow,
     pickupAppointmentRows: [],
+    traceabilityRows: [],
     ancillaryErrors: []
   });
 });
@@ -29,6 +30,7 @@ test("one history query failure is reported without discarding the other history
     activityRows: [],
     workflowRows: workflow,
     pickupAppointmentRows: [],
+    traceabilityRows: [],
     ancillaryErrors: ["activity"]
   });
 });
@@ -43,6 +45,7 @@ test("query errors and malformed ancillary responses are not treated as successf
     activityRows: [],
     workflowRows: [],
     pickupAppointmentRows: [],
+    traceabilityRows: [],
     ancillaryErrors: ["activity", "workflow"]
   });
 });
@@ -52,6 +55,7 @@ test("empty successful history results remain distinguishable from failures", ()
     activityRows: [],
     workflowRows: [],
     pickupAppointmentRows: [],
+    traceabilityRows: [],
     ancillaryErrors: []
   });
 });
@@ -63,6 +67,18 @@ test("pickup appointment read failures are reported separately from successful h
     activityRows: activity,
     workflowRows: [],
     pickupAppointmentRows: [],
+    traceabilityRows: [],
     ancillaryErrors: ["pickup_appointments"]
+  });
+});
+
+test("traceability-column failures remain ancillary to the core lot read", () => {
+  const traceabilityFailure = { status: "rejected", reason: new Error("column unavailable") };
+  assert.deepEqual(collectAncillaryReadResults(fulfilled([]), fulfilled([]), fulfilled([]), traceabilityFailure), {
+    activityRows: [],
+    workflowRows: [],
+    pickupAppointmentRows: [],
+    traceabilityRows: [],
+    ancillaryErrors: ["traceability"]
   });
 });
