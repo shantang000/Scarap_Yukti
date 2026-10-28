@@ -15,6 +15,10 @@ const privacyMigration = readFileSync(
   resolve(root, "supabase/migrations/20261025000000_profile_privacy_lookup.sql"),
   "utf8"
 );
+const pickupMigration = readFileSync(
+  resolve(root, "supabase/migrations/20261027000000_pickup_appointment_coordination.sql"),
+  "utf8"
+);
 
 function policy(name) {
   const match = schemaMigration.match(new RegExp(`create policy ${name}\\b[\\s\\S]*?;`, "i"));
@@ -124,4 +128,41 @@ test("browser Supabase client reads only the publishable configuration variables
   assert.match(supabaseClient, /VITE_SUPABASE_URL/);
   assert.match(supabaseClient, /VITE_SUPABASE_PUBLISHABLE_KEY/);
   assert.doesNotMatch(supabaseClient, /VITE_SUPABASE_(?:SECRET|SERVICE_ROLE)/i);
+});
+
+test("pickup appointment table is read-only to clients and RPCs enforce the participant roles", () => {
+  assert.match(pickupMigration, /create table public\.pickup_appointments/i);
+  assert.match(pickupMigration, /alter table public\.pickup_appointments enable row level security/i);
+  assert.match(pickupMigration, /revoke all on table public\.pickup_appointments from public, anon, authenticated/i);
+  assert.match(pickupMigration, /grant select on public\.pickup_appointments to authenticated/i);
+  assert.doesNotMatch(pickupMigration, /create policy[\s\S]*?on public\.pickup_appointments for (?:insert|update|delete)/i);
+  const appointmentPolicy = pickupMigration.match(/create policy pickup_appointments_read_participants_and_admin[\s\S]*?;/i)?.[0];
+  assert.ok(appointmentPolicy, "Expected the participant/Admin appointment-read policy");
+  assert.match(appointmentPolicy, /current_app_role\(\) = 'admin'/i);
+  assert.match(appointmentPolicy, /scarap_private\.owns_lot\(lot_id\)/i);
+  assert.match(appointmentPolicy, /o\.recycler_id = \(select auth\.uid\(\)\)[\s\S]*?o\.status = 'accepted'/i);
+
+  const collectorRpc = functionDefinition(pickupMigration, "public.propose_pickup_appointment");
+  assert.match(collectorRpc, /security definer[\s\S]*?set search_path = ''/i);
+  assert.match(collectorRpc, /current_app_role\(\) is distinct from 'collector'/i);
+  assert.match(collectorRpc, /v_collector_id <> v_user_id/i);
+  assert.match(collectorRpc, /v_lot_status <> 'pickup_scheduled'/i);
+  assert.match(collectorRpc, /o\.status = 'accepted'/i);
+  assert.match(collectorRpc, /interval '30 minutes'[\s\S]*?interval '90 days'/i);
+  assert.match(collectorRpc, /existing\.status = 'reschedule_requested'/i);
+
+  const recyclerRpc = functionDefinition(pickupMigration, "public.respond_to_pickup_appointment");
+  assert.match(recyclerRpc, /security definer[\s\S]*?set search_path = ''/i);
+  assert.match(recyclerRpc, /v_role is distinct from 'recycler'/i);
+  assert.match(recyclerRpc, /v_recycler_id <> v_user_id/i);
+  assert.match(recyclerRpc, /p_decision not in \('confirm', 'request_reschedule'\)/i);
+  assert.match(recyclerRpc, /char_length\(v_note\) < 10/i);
+  assert.match(pickupMigration, /revoke all on function public\.propose_pickup_appointment\(uuid, timestamptz, text\) from public, anon, authenticated/i);
+  assert.match(pickupMigration, /revoke all on function public\.respond_to_pickup_appointment\(uuid, text, text\) from public, anon, authenticated/i);
+  assert.match(pickupMigration, /grant execute on function public\.propose_pickup_appointment\(uuid, timestamptz, text\) to authenticated/i);
+  assert.match(pickupMigration, /grant execute on function public\.respond_to_pickup_appointment\(uuid, text, text\) to authenticated/i);
+
+  assert.match(app, /supabase\.rpc\("propose_pickup_appointment"/);
+  assert.match(app, /supabase\.rpc\("respond_to_pickup_appointment"/);
+  assert.doesNotMatch(app, /\.from\("pickup_appointments"\)\s*\.(?:insert|update|delete)\(/);
 });

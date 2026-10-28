@@ -12,6 +12,7 @@ Scarap_Yukti is built with React, Vite, and Supabase. It provides separate Colle
 - **Collector:** create e-waste lots, view incoming Recycler offers, and accept or reject pending offers for owned lots.
 - **Recycler:** browse available lots and submit an offer. The database permits one offer per Recycler per lot.
 - **Admin:** monitor marketplace records and advance allowed workflow steps through a database RPC.
+- **Pickup coordination (follow-up migration required):** the lot-owning Collector can propose a time after accepting an offer; the accepted Recycler can confirm it or request another time. This records an agreement, not a guaranteed pickup or completed handover.
 - **Workflow history:** track offer decisions, pickup scheduling, collection, recycling review, and recycled status.
 - **Authentication:** sign up, sign in, sign out, and recover a password with Supabase Auth. The dashboard role is read from the user's database profile.
 - **Profile privacy:** direct profile reads are limited to the user's own profile; a restricted database function returns participant names only for relevant visible marketplace records.
@@ -61,8 +62,17 @@ The migrations in `supabase/migrations/` are intended to be applied in this orde
 
 1. `20261023000000_marketplace_schema_and_rls.sql` — marketplace tables, constraints, RLS policies, triggers, and workflow RPCs.
 2. `20261025000000_profile_privacy_lookup.sql` — own-profile read policy and the limited marketplace participant-name lookup function.
+3. `20261027000000_pickup_appointment_coordination.sql` — optional follow-up for proposed/confirmed pickup times and appointment reads by the lot participants and Admins.
 
 These are schema migrations, not scripts to rerun casually. Before applying them to an existing Supabase project, check its migration history and actual schema. The project owner reports that both have already been applied to the current project; do not reapply them there. For a fresh project, review the SQL and test it on a disposable database before applying it to a main project. This repository and its build do not run SQL against Supabase.
+
+The pickup coordination migration is new and has **not** been applied by this project change. Review and test it on a disposable database first. Apply it manually only after checking the current database and migration history; do not rerun the first two migrations. Until the follow-up migration is applied and its table is readable under RLS, the core lots/offers screens remain usable but pickup time coordination will be unavailable.
+
+### Live marketplace updates
+
+Signed-in dashboards subscribe to Supabase Postgres Changes for inserts and updates to `lots`, `offers`, `workflow_events`, and `activity_history`. Once the pickup coordination migration is applied, the app also subscribes to `pickup_appointments`. The app uses events only to reload its normal RLS-protected reads; it does not display the event payload as trusted data. It does not subscribe to delete events. If a subscription is unavailable, the dashboard shows a manual-refresh option.
+
+For live updates, confirm in the Supabase Dashboard that Realtime is enabled and that the four existing `public` tables are included in the `supabase_realtime` publication. After the new pickup migration is applied, include `public.pickup_appointments` as well. Do not enable tables or change policies blindly: verify the deployed schema and RLS first. Publication membership is separate from RLS and does not grant table access by itself. No migration is included for this project setting. Until enabled, use the in-app refresh button; this setup has not been verified against the hosted project. If an update makes a row invisible under the signed-in user's RLS policy, that user may not receive an event that removes the now-invisible row, so use manual refresh when needed.
 
 New Auth users receive the `collector` role from the database profile trigger. The app does not let users select or promote their database role. A trusted project operator must provision `recycler` and `admin` roles through an appropriate protected process. The signed-out role selector only switches between local demo dashboards.
 
@@ -77,6 +87,8 @@ Use separate signed-in accounts with the required database roles. Verify the acc
 3. Sign back in as the lot-owning Collector and accept or reject the pending offer.
 4. Sign in as an Admin and advance the accepted lot through collection and recycling review to `recycled`.
 5. Refresh the page and confirm the status persisted. Check the corresponding records in Supabase.
+
+If the pickup coordination migration has been reviewed and applied, continue: the Collector proposes a date/time for the accepted offer; the accepted Recycler confirms it or requests another time; the Collector proposes a revised time if requested. A confirmed appointment records both accounts' response. Admin should mark the lot collected only after the actual handover. Appointment notes and agreement do not verify a real-world pickup.
 
 The app calls `respond_to_offer` for Collector decisions and `advance_lot_workflow` for Admin workflow actions. The database functions and RLS policies are intended to enforce permissions and valid transitions; frontend visibility checks are not a security boundary.
 

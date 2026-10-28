@@ -48,7 +48,11 @@ export async function loadMarketplaceSnapshot() {
         .from("workflow_events")
         .select("id, lot_id, actor_id, from_status, to_status, event_type, note, created_at")
         .order("created_at", { ascending: false })
-        .limit(100)
+        .limit(100),
+      supabase
+        .from("pickup_appointments")
+        .select("id, lot_id, offer_id, scheduled_at, status, proposed_note, response_note, proposed_by, responded_by, created_at, updated_at")
+        .order("created_at", { ascending: false })
     ])
   ]);
 
@@ -58,7 +62,7 @@ export async function loadMarketplaceSnapshot() {
     throw new Error("Could not load marketplace data: the database returned an invalid lots or offers response.");
   }
 
-  const { activityRows, workflowRows, ancillaryErrors } = collectAncillaryReadResults(...ancillaryResults);
+  const { activityRows, workflowRows, pickupAppointmentRows, ancillaryErrors } = collectAncillaryReadResults(...ancillaryResults);
 
   const lotRows = lotsResult.data || [];
   const offerRows = offersResult.data || [];
@@ -133,5 +137,19 @@ export async function loadMarketplaceSnapshot() {
     time: displayTime(item.created_at)
   }));
 
-  return { lots, activity, workflowEvents, ancillaryErrors };
+  const pickupAppointments = pickupAppointmentRows.map(item => ({
+    id: item.id,
+    lotId: item.lot_id,
+    offerId: item.offer_id,
+    scheduledAt: item.scheduled_at,
+    status: item.status,
+    proposedNote: item.proposed_note || "",
+    responseNote: item.response_note || "",
+    proposedBy: item.proposed_by,
+    respondedBy: item.responded_by,
+    createdAt: item.created_at,
+    updatedAt: item.updated_at
+  }));
+
+  return { lots, activity, workflowEvents, pickupAppointments, ancillaryErrors };
 }

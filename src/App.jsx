@@ -1,12 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
-  Activity, Bell, Check, ChevronDown, CircleHelp, ClipboardList, Download,
-  Filter, Leaf, MapPin, Package, Plus, Recycle, Search, ShieldCheck, Sparkles,
+  Activity, Bell, Check, ChevronDown, CircleHelp, ClipboardList, Download, Menu,
+  Filter, Leaf, MapPin, Package, Plus, Recycle, RefreshCw, Search, ShieldCheck, Sparkles,
   Truck, Users, Wallet, X, Zap
 } from "lucide-react";
 import { hasSupabaseConfig, supabase } from "./lib/supabase.js";
 import { loadMarketplaceSnapshot } from "./lib/marketplaceReads.js";
+import { subscribeToMarketplaceChanges } from "./lib/marketplaceRealtime.js";
 import { applyDemoWorkflowTransition, decideDemoOffer } from "./lib/workflowRules.js";
+import { normalizeDemoPickupAppointment, respondToDemoPickupAppointment, validatePickupSchedule, validateRescheduleRequest } from "./lib/pickupAppointmentRules.js";
 
 const STORAGE_KEY = "scarap-yukti-demo-v1";
 const DEMO_COLLECTOR = "Demo Collector";
@@ -36,6 +38,7 @@ function normalizeOffer(offer, index) {
 
 function normalizeLot(lot, index) {
   const item = lot && typeof lot === "object" ? lot : {};
+  const id = safeString(item.id, `SY-legacy-${index + 1}`);
   const weight = Number(item.weight);
   const legacyStatus = item.status === "Offer received" ? "Offer submitted" : item.status === "Recycling documented" ? "Recycling review" : item.status;
   const status = statusOptions.includes(legacyStatus) ? legacyStatus : "Open";
@@ -43,7 +46,7 @@ function normalizeLot(lot, index) {
     ? item.date
     : new Date().toISOString().slice(0, 10);
   return {
-    id: safeString(item.id, `SY-legacy-${index + 1}`),
+    id,
     collector: safeString(item.collector, DEMO_COLLECTOR),
     title: safeString(item.title, "Untitled lot"),
     category: safeString(item.category, "Other"),
@@ -53,6 +56,7 @@ function normalizeLot(lot, index) {
     status,
     notes: safeString(item.notes),
     evidence: safeString(item.evidence),
+    pickupAppointment: normalizeDemoPickupAppointment(item.pickupAppointment, id),
     offers: Array.isArray(item.offers) ? item.offers.map(normalizeOffer) : []
   };
 }
@@ -97,13 +101,18 @@ export default function App() {
   const [data, setData] = useState(readSaved);
   const [demoRole, setDemoRole] = useState("Collector");
   const [authSession, setAuthSession] = useState(null);
+  const [demoAccess, setDemoAccess] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const authUserId = useRef(null);
   const [authInitializing, setAuthInitializing] = useState(true);
   const [profile, setProfile] = useState(null);
   const [profileState, setProfileState] = useState("idle");
   const [connectedData, setConnectedData] = useState(null);
+  const hasMarketplaceSnapshot = useRef(false);
   const [marketplaceState, setMarketplaceState] = useState("idle");
+  const [marketplaceRefreshing, setMarketplaceRefreshing] = useState(false);
   const [marketplaceError, setMarketplaceError] = useState("");
+  const [realtimeStatus, setRealtimeStatus] = useState("idle");
   const [reloadToken, setReloadToken] = useState(0);
   const [authMode, setAuthMode] = useState("signin");
   const [passwordRecovery, setPasswordRecovery] = useState(false);
@@ -121,6 +130,7 @@ export default function App() {
   const [evidenceDrafts, setEvidenceDrafts] = useState({});
   const [disputeDrafts, setDisputeDrafts] = useState({});
   const [workflowBusyLotId, setWorkflowBusyLotId] = useState(null);
+  const [pickupBusyLotId, setPickupBusyLotId] = useState(null);
   const [showForm, setShowForm] = useState(false);
   const [createBusy, setCreateBusy] = useState(false);
   const [notice, setNotice] = useState("");
@@ -154,8 +164,11 @@ export default function App() {
         setProfile(null);
         setProfileState(session ? "loading" : "idle");
         setConnectedData(null);
+        hasMarketplaceSnapshot.current = false;
         setMarketplaceState(session ? "loading" : "idle");
+        setMarketplaceRefreshing(false);
         setMarketplaceError("");
+        setRealtimeStatus(session ? "connecting" : "idle");
         setShowForm(false);
         setOfferLot(null);
       }
@@ -218,24 +231,47 @@ export default function App() {
     if (!authSession?.user?.id || profileState !== "ready") return undefined;
 
     let active = true;
-    setMarketplaceState("loading");
+    setMarketplaceRefreshing(true);
+    if (!hasMarketplaceSnapshot.current) setMarketplaceState("loading");
     setMarketplaceError("");
 
     loadMarketplaceSnapshot()
       .then(snapshot => {
         if (!active) return;
         setConnectedData(snapshot);
+        hasMarketplaceSnapshot.current = true;
         setMarketplaceState("ready");
+        setMarketplaceRefreshing(false);
       })
       .catch(error => {
         if (!active) return;
-        setConnectedData(null);
+        setMarketplaceRefreshing(false);
         setMarketplaceError(error.message || "Could not load marketplace data. Please try again.");
-        setMarketplaceState("error");
+        if (hasMarketplaceSnapshot.current) {
+          setMarketplaceState("ready");
+        } else {
+          setConnectedData(null);
+          setMarketplaceState("error");
+        }
       });
 
     return () => { active = false; };
   }, [authSession?.user?.id, profileState, reloadToken]);
+
+  useEffect(() => {
+    const userId = authSession?.user?.id;
+    if (!supabase || !userId || profileState !== "ready") {
+      setRealtimeStatus("idle");
+      return undefined;
+    }
+
+    setRealtimeStatus("connecting");
+    return subscribeToMarketplaceChanges(supabase, {
+      userId,
+      onChange: () => setReloadToken(value => value + 1),
+      onStatus: setRealtimeStatus
+    });
+  }, [authSession?.user?.id, profileState]);
 
   const role = authSession
     ? profile?.role ? profile.role[0].toUpperCase() + profile.role.slice(1) : null
@@ -382,7 +418,7 @@ export default function App() {
     try {
       const { error } = await supabase.auth.signOut();
       if (error) throw error;
-      setAuthFeedback("Signed out. The demo dashboard is available below.");
+      setAuthFeedback("Signed out. You can sign in again or open the local demo.");
     } catch (error) {
       setAuthFeedback(error.message || "Could not sign out. Please try again.", "error");
     } finally {
@@ -595,6 +631,146 @@ export default function App() {
     notify(result.lot.status === "Open" ? "Offer rejected. The lot is open for new offers." : "Offer rejected. Other offers are still pending.");
   }
 
+  async function proposePickupTime(lotId, scheduledAt, note) {
+    const validation = validatePickupSchedule(scheduledAt);
+    if (!validation.ok) {
+      const messages = {
+        invalid_time: "Choose a valid pickup date and time.",
+        too_soon: "Choose a pickup time at least 30 minutes from now.",
+        too_far: "Choose a pickup time within the next 90 days."
+      };
+      notify(messages[validation.reason], "error");
+      return false;
+    }
+    const cleanNote = note.trim();
+    if (cleanNote.length > 500) {
+      notify("Pickup note must be 500 characters or fewer.", "error");
+      return false;
+    }
+
+    if (authSession) {
+      if (profile?.role !== "collector" || !supabase || !authSession.user?.id) {
+        notify("A signed-in Collector account is required to propose a pickup time.", "error");
+        return false;
+      }
+      const lot = connectedData?.lots.find(item => item.id === lotId && item.collectorId === authSession.user.id);
+      if (!lot || lot.status !== "Pickup scheduled" || !lot.offers.some(offer => offer.status === "accepted")) {
+        notify("A pickup time can only be proposed for your lot after an offer is accepted.", "error");
+        return false;
+      }
+      setPickupBusyLotId(lotId);
+      try {
+        const { error } = await supabase.rpc("propose_pickup_appointment", {
+          p_lot_id: lotId,
+          p_scheduled_at: new Date(validation.timestamp).toISOString(),
+          p_note: cleanNote
+        });
+        if (error) throw error;
+        setReloadToken(value => value + 1);
+        notify("Pickup time proposed to the accepted Recycler. It is not confirmed until they respond.");
+        return true;
+      } catch (error) {
+        notify(error.message || "The pickup time could not be saved.", "error");
+        return false;
+      } finally {
+        setPickupBusyLotId(null);
+      }
+    }
+
+    const lot = data.lots.find(item => item.id === lotId);
+    if (!lot || lot.status !== "Pickup scheduled" || !lot.offers.some(offer => offer.status === "accepted")) {
+      notify("A pickup time can only be proposed after a demo offer is accepted.", "error");
+      return false;
+    }
+    const previous = lot.pickupAppointment;
+    if (previous?.status === "confirmed") {
+      notify("The Recycler has confirmed this time. They must request a change before another time is proposed.", "error");
+      return false;
+    }
+    const appointment = {
+      id: previous?.id || createUniqueId("PA", data.lots.map(item => item.pickupAppointment?.id).filter(Boolean)),
+      lotId,
+      offerId: lot.offers.find(offer => offer.status === "accepted")?.id,
+      scheduledAt: new Date(validation.timestamp).toISOString(),
+      status: "proposed",
+      proposedNote: cleanNote,
+      responseNote: "",
+      proposedBy: DEMO_COLLECTOR,
+      respondedBy: null
+    };
+    setData(prev => ({
+      ...prev,
+      lots: prev.lots.map(item => item.id === lotId ? { ...item, pickupAppointment: appointment } : item),
+      activity: logActivity(prev, `${lotId}: pickup time proposed; awaiting Recycler response`)
+    }));
+    notify("Pickup time proposed in the local demo. It is not confirmed until the demo Recycler responds.");
+    return true;
+  }
+
+  async function respondToPickupTime(lotId, decision, note = "") {
+    if (!['confirm', 'request_reschedule'].includes(decision)) {
+      notify("Choose whether to confirm the proposed pickup time or request a different time.", "error");
+      return false;
+    }
+    const cleanNote = note.trim();
+    if (decision === "request_reschedule") {
+      const validation = validateRescheduleRequest(cleanNote);
+      if (!validation.ok) {
+        notify("Explain the requested change in 10 to 500 characters.", "error");
+        return false;
+      }
+    } else if (cleanNote.length > 500) {
+      notify("Response note must be 500 characters or fewer.", "error");
+      return false;
+    }
+
+    if (authSession) {
+      if (profile?.role !== "recycler" || !supabase || !authSession.user?.id) {
+        notify("A signed-in Recycler account is required to respond to this pickup proposal.", "error");
+        return false;
+      }
+      const acceptedOffer = connectedData?.lots.find(item => item.id === lotId)?.offers.find(offer =>
+        offer.status === "accepted" && offer.recyclerId === authSession.user.id
+      );
+      const appointment = connectedData?.pickupAppointments?.find(item => item.lotId === lotId);
+      if (!acceptedOffer || !appointment || appointment.status !== "proposed") {
+        notify("There is no pending pickup proposal for your accepted offer. Refresh the marketplace.", "error");
+        return false;
+      }
+      setPickupBusyLotId(lotId);
+      try {
+        const { error } = await supabase.rpc("respond_to_pickup_appointment", {
+          p_lot_id: lotId,
+          p_decision: decision,
+          p_note: cleanNote
+        });
+        if (error) throw error;
+        setReloadToken(value => value + 1);
+        notify(decision === "confirm" ? "Pickup time confirmed. Keep coordination and handover details with the participants." : "Reschedule request sent to the Collector.");
+        return true;
+      } catch (error) {
+        notify(error.message || "Your pickup response could not be saved.", "error");
+        return false;
+      } finally {
+        setPickupBusyLotId(null);
+      }
+    }
+
+    const lot = data.lots.find(item => item.id === lotId);
+    const result = respondToDemoPickupAppointment(lot?.pickupAppointment, decision, cleanNote, DEMO_RECYCLER);
+    if (!result.ok) {
+        notify(result.reason === "note_length" ? "Explain the requested change in 10 to 500 characters." : result.reason === "time_passed" ? "This proposed time has passed. Ask the Collector to propose another time." : "There is no pending demo pickup proposal to respond to.", "error");
+      return false;
+    }
+    setData(prev => ({
+      ...prev,
+      lots: prev.lots.map(item => item.id === lotId ? { ...item, pickupAppointment: result.appointment } : item),
+      activity: logActivity(prev, `${lotId}: Recycler ${decision === "confirm" ? "confirmed the proposed pickup time" : "requested a different pickup time"}`)
+    }));
+    notify(decision === "confirm" ? "Demo pickup time confirmed; this does not verify that collection happened." : "Demo reschedule request sent to the Collector.");
+    return true;
+  }
+
   async function submitOffer(e) {
     e.preventDefault();
     const price = Number(offerPrice);
@@ -668,17 +844,21 @@ export default function App() {
   }
 
   const navigation = role === "Collector"
-    ? [{ key: "overview", label: "Overview", icon: <Activity size={18} /> }, { key: "lots", label: "My lots", icon: <Package size={18} /> }, { key: "activity", label: "Activity", icon: <ClipboardList size={18} /> }]
+    ? [{ key: "overview", label: "Dashboard", icon: <Activity size={18} /> }, { key: "lots", label: "Scrap requests", icon: <Package size={18} /> }, { key: "pricing", label: "Pricing", icon: <Wallet size={18} /> }, { key: "activity", label: "History", icon: <ClipboardList size={18} /> }, { key: "settings", label: "Settings", icon: <Users size={18} /> }]
     : role === "Recycler"
-      ? [{ key: "overview", label: "Browse lots", icon: <Search size={18} /> }, { key: "my-offers", label: "My offers", icon: <Wallet size={18} /> }, { key: "activity", label: "Activity", icon: <ClipboardList size={18} /> }]
-      : [{ key: "overview", label: "Marketplace monitor", icon: <ShieldCheck size={18} /> }, { key: "lots", label: "All lots & offers", icon: <Package size={18} /> }, { key: "activity", label: "Activity", icon: <ClipboardList size={18} /> }];
+      ? [{ key: "overview", label: "Dashboard", icon: <Search size={18} /> }, { key: "lots", label: "Scrap requests", icon: <Package size={18} /> }, { key: "my-offers", label: "My offers", icon: <Wallet size={18} /> }, { key: "pricing", label: "Pricing", icon: <Wallet size={18} /> }, { key: "activity", label: "History", icon: <ClipboardList size={18} /> }, { key: "settings", label: "Settings", icon: <Users size={18} /> }]
+      : [{ key: "overview", label: "Dashboard", icon: <ShieldCheck size={18} /> }, { key: "lots", label: "Scrap requests", icon: <Package size={18} /> }, { key: "pricing", label: "Pricing", icon: <Wallet size={18} /> }, { key: "activity", label: "History", icon: <ClipboardList size={18} /> }, { key: "settings", label: "Settings", icon: <Users size={18} /> }];
   const currentSection = navigation.some(item => item.key === section) ? section : "overview";
+  const currentNavigationItem = navigation.find(item => item.key === currentSection);
   const myOffers = viewData.lots.flatMap(lot => lot.offers.filter(offer => authSession
     ? offer.recyclerId === authSession.user.id
     : offer.recycler === DEMO_RECYCLER).map(offer => ({ ...offer, lot })));
   const collectorLots = viewData.lots.filter(lot => authSession
     ? lot.collectorId === authSession.user.id
     : lot.collector === DEMO_COLLECTOR);
+  const pickupAppointmentsByLot = new Map(authSession
+    ? (connectedData?.pickupAppointments || []).map(appointment => [appointment.lotId, appointment])
+    : viewData.lots.filter(lot => lot.pickupAppointment).map(lot => [lot.id, lot.pickupAppointment]));
   const collectorStats = [
     { label: "My lots", value: collectorLots.length, note: authSession ? "Visible to your account" : "Local demo records", icon: <Package />, tone: "teal" },
     { label: "Offers to review", value: collectorLots.flatMap(lot => lot.offers).filter(offer => offer.status === "pending").length, note: "Waiting for your decision", icon: <Wallet />, tone: "orange" },
@@ -697,6 +877,16 @@ export default function App() {
     { label: "Offers", value: offerCount, note: `${pendingOfferCount} pending decision`, icon: <Wallet />, tone: "orange" },
     { label: "Recorded weight", value: `${totalWeight} kg`, note: authSession ? "Visible database records" : "Local demo records", icon: <Truck />, tone: "purple" }
   ];
+  const workspaceTitle = currentSection === "pricing" ? "Indicative price calculator"
+    : currentSection === "settings" ? "Account settings"
+      : currentSection === "activity" ? "History and workflow"
+        : currentSection === "lots" ? role === "Recycler" ? "Browse scrap requests" : role === "Admin" ? "Marketplace requests" : "Your scrap requests"
+          : role === "Collector" ? "Manage your e-waste lots" : role === "Recycler" ? "Find lots to recycle" : "Marketplace monitoring";
+  const workspaceDescription = currentSection === "pricing" ? "Calculate a simple total from a rate you provide. This is arithmetic only, not a live market quote."
+    : currentSection === "settings" ? "Review your signed-in account, database role, and current data mode. Role changes are not available here."
+      : currentSection === "activity" ? "Review recorded activity and workflow events visible to your account."
+        : currentSection === "lots" ? role === "Recycler" ? "Browse eligible marketplace lots and submit offers." : "Search and review the lots available in this role-specific workspace."
+          : authSession ? role === "Collector" ? "Records are loaded from Supabase. You can create lots and decide incoming offers. Pickup time coordination requires the reviewed follow-up migration." : role === "Recycler" ? "Records are loaded from Supabase. You can browse lots, submit offers, and respond to a pickup-time proposal when your offer is accepted." : "Records are loaded from Supabase. Admin workflow changes use the database RPC and its authorization checks." : "Local demo data only. The role selector changes this view; it does not sign you in or enforce secure permissions.";
 
   if (authInitializing || (!passwordRecovery && authSession && profileState === "loading")) {
     return <div className="auth-gate"><div className="auth-card"><span className="auth-spinner" /><h1>Loading your account</h1><p>Checking your sign-in and database profile…</p></div></div>;
@@ -723,42 +913,21 @@ export default function App() {
   if (authSession && marketplaceState === "error") {
     return <div className="auth-gate"><div className="auth-card"><span className="eyebrow">SUPABASE READ ERROR</span><h1>Marketplace data could not be loaded</h1><p className="auth-message error" role="alert">{marketplaceError}</p><p>Check that the migration is applied, the <code>public</code> schema is exposed to the Data API, and your signed-in role can read these rows under RLS.</p><div className="auth-form-actions"><button className="btn btn-primary" onClick={() => setReloadToken(value => value + 1)}>Try again</button><button className="btn btn-light" onClick={signOut} disabled={authBusy}>Sign out</button></div></div></div>;
   }
-
-  return (
-    <div className="app-shell">
-      <aside className="sidebar">
-        <div className="brand">
-          <div className="brand-icon"><Recycle size={23} /></div>
-          <div><strong>Scarap_Yukti</strong><span>SMART E-WASTE NETWORK</span></div>
+  if (!authSession && !demoAccess) {
+    return <div className="auth-gate auth-login-gate">
+      <div className="ambient-mesh" aria-hidden="true"><span /><span /></div>
+      <section className="auth-login-layout" aria-labelledby="auth-welcome-title">
+        <div className="auth-brand-panel">
+          <div className="auth-brand"><span className="brand-icon"><Recycle size={23} /></span><span><strong>Scarap_Yukti</strong><small>RESPONSIBLE E-WASTE MARKETPLACE</small></span></div>
+          <div><span className="eyebrow"><Leaf size={14} /> A MORE CIRCULAR WORKSPACE</span><h1 id="auth-welcome-title">Move useful materials forward.</h1><p>Connect e-waste collectors and recyclers, review offers, and follow each lot through its recorded workflow.</p></div>
+          <div className="auth-brand-foot"><ShieldCheck size={16} /><span>Account roles are loaded from your Supabase profile after sign-in.</span></div>
         </div>
-        <div className="workspace-label">WORKSPACE</div>
-        <nav className="nav-list">
-          {navigation.map(item => <button key={item.key} type="button" className={`nav-item ${currentSection === item.key ? "active" : ""}`} aria-current={currentSection === item.key ? "page" : undefined} onClick={() => setSection(item.key)}><span className="nav-item-icon" aria-hidden="true">{item.icon}</span><span>{item.label}</span>{item.key === "lots" && role === "Admin" ? <span className="nav-count">{viewData.lots.length}</span> : null}{item.key === "my-offers" ? <span className="nav-count">{myOffers.length}</span> : null}</button>)}
-        </nav>
-        <div className="sidebar-bottom">
-          <div className="local-card"><ShieldCheck size={18} /><div><strong>{authSession ? "Supabase connected" : "Local demo only"}</strong><span>{authSession ? "Collector + Recycler actions · Admin workflow RPC" : "Not shared across users or devices"}</span></div></div>
-          <div className="user-mini"><div className="avatar">SY</div><div><strong>{authSession ? profile?.display_name || authSession.user.email : "Scarap_Yukti"}</strong><span>{role} {authSession ? "account" : "view"}</span></div><ChevronDown size={16} /></div>
-        </div>
-      </aside>
-
-      <main className="main">
-        <header className="topbar">
-          <div className="breadcrumb">Scarap_Yukti <span>/</span> <strong>Overview</strong></div>
-          <div className="top-actions">
-            <span className={authSession ? "connected-pill" : "demo-pill"}><span className="dot"></span> {authSession ? role === "Collector" ? "SUPABASE · READ + CREATE LOTS + OFFER DECISIONS" : role === "Recycler" ? "SUPABASE · READ + OFFERS" : "SUPABASE ADMIN WORKFLOW" : "DEMO DATA"}</span>
-            <button className="icon-btn" title="Help" onClick={() => notify(authSession ? "Supabase reads, Collector lot creation, Recycler offer submission, and Collector offer decisions are connected. Payments and recycler verification are not connected. Admin workflow actions use the database RPC." : "This is a local frontend demo. The role selector does not sign you in or enforce secure permissions.")}><CircleHelp size={19} /></button>
-            <button className="icon-btn" title="Notifications" onClick={() => notify(authSession ? "Supabase notifications are not connected yet." : "You are all caught up in this demo.")}><Bell size={19} /></button>
-            {authSession && profile
-              ? <span className="auth-role-pill">SIGNED IN · {role}</span>
-              : <div className="role-picker"><Users size={17} /><select value={demoRole} onChange={e => { setDemoRole(e.target.value); setSection("overview"); setQuery(""); setStatusFilter("All statuses"); setCategoryFilter("All categories"); setLocationFilter("All locations"); }} aria-label="Choose demo dashboard"><option>Collector</option><option>Recycler</option><option>Admin</option></select><ChevronDown size={14} /></div>}
-          </div>
-        </header>
-
-        <div className="content">
+        <div className="auth-login-card">
+          <div className="auth-login-heading"><span className="eyebrow">YOUR WORKSPACE</span><h2>Sign in to continue</h2><p>Use your account to open the marketplace dashboard.</p></div>
           <AuthPanel
             configured={hasSupabaseConfig}
-            session={authSession}
-            profile={profile}
+            session={null}
+            profile={null}
             mode={authMode}
             setMode={mode => { setAuthMode(mode); setAuthFeedback(""); }}
             form={authForm}
@@ -770,17 +939,64 @@ export default function App() {
             message={authMessage}
             messageType={authMessageType}
           />
+          <div className="auth-demo-divider"><span>or</span></div>
+          <div className="auth-demo-entry"><div><strong>Explore the local demo</strong><span>Demo records stay in this browser and are not shared.</span></div><button type="button" className="btn btn-light" onClick={() => { setDemoAccess(true); setSection("overview"); }}>Open demo</button></div>
+        </div>
+      </section>
+    </div>;
+  }
+
+  return (
+    <div className={`app-shell ${sidebarCollapsed ? "sidebar-collapsed" : ""}`}>
+      <div className="ambient-mesh" aria-hidden="true"><span /><span /></div>
+      <aside className="sidebar" aria-label="Main navigation">
+        <div className="brand">
+          <div className="brand-icon"><Recycle size={23} /></div>
+          <div><strong>Scarap_Yukti</strong><span>SMART E-WASTE NETWORK</span></div>
+        </div>
+        <div className="workspace-label">WORKSPACE</div>
+        <nav className="nav-list">
+          {navigation.map(item => <button key={item.key} type="button" className={`nav-item ${currentSection === item.key ? "active" : ""}`} aria-current={currentSection === item.key ? "page" : undefined} aria-label={sidebarCollapsed ? item.label : undefined} onClick={() => setSection(item.key)} title={sidebarCollapsed ? item.label : undefined}><span className="nav-item-icon" aria-hidden="true">{item.icon}</span><span className="nav-item-label">{item.label}</span>{item.key === "lots" && role === "Admin" ? <span className="nav-count">{viewData.lots.length}</span> : null}{item.key === "my-offers" ? <span className="nav-count">{myOffers.length}</span> : null}</button>)}
+        </nav>
+        <div className="sidebar-bottom">
+          <div className="local-card"><ShieldCheck size={18} /><div><strong>{authSession ? "Supabase connected" : "Local demo only"}</strong><span>{authSession ? "Collector + Recycler actions · Admin workflow RPC" : "Not shared across users or devices"}</span></div></div>
+          <div className="user-mini"><div className="avatar">SY</div><div><strong>{authSession ? profile?.display_name || authSession.user.email : "Scarap_Yukti"}</strong><span>{role} {authSession ? "account" : "view"}</span></div><ChevronDown size={16} /></div>
+          {!authSession && <button type="button" className="demo-exit-link" onClick={() => setDemoAccess(false)}>Return to sign in</button>}
+        </div>
+      </aside>
+
+      <main className="main">
+        <header className="topbar">
+          <div className="topbar-leading"><button type="button" className="icon-btn sidebar-toggle" onClick={() => setSidebarCollapsed(value => !value)} aria-label={sidebarCollapsed ? "Expand navigation" : "Collapse navigation"} aria-expanded={!sidebarCollapsed}><Menu size={17} aria-hidden="true" /></button><div className="breadcrumb">Scarap_Yukti <span>/</span> <strong>{currentNavigationItem?.label || "Dashboard"}</strong></div></div>
+          <div className="top-actions">
+            <span className={authSession ? "connected-pill" : "demo-pill"}><span className="dot"></span> {authSession ? role === "Collector" ? "SUPABASE · READ + CREATE LOTS + OFFER DECISIONS" : role === "Recycler" ? "SUPABASE · READ + OFFERS" : "SUPABASE ADMIN WORKFLOW" : "DEMO DATA"}</span>
+            {authSession && <><span className={`realtime-status ${realtimeStatus}`} role="status" aria-live="polite"><span className="dot"></span>{realtimeStatus === "connected" ? "LIVE UPDATES" : realtimeStatus === "connecting" ? "CONNECTING" : "MANUAL REFRESH"}</span><button type="button" className="icon-btn" onClick={() => setReloadToken(value => value + 1)} disabled={marketplaceRefreshing} title="Refresh marketplace data" aria-label="Refresh marketplace data"><RefreshCw size={17} /></button></>}
+            <button className="icon-btn" title="Help" onClick={() => notify(authSession ? "Supabase reads, Collector lot creation and offer decisions, Recycler offers, and Admin workflow RPC actions are connected. Pickup time coordination requires the reviewed follow-up migration. Payments, automated pickup, and Recycler verification are not connected." : "This is a local frontend demo. The role selector does not sign you in or enforce secure permissions.")}><CircleHelp size={19} /></button>
+            <button className="icon-btn" title="Notifications" onClick={() => notify(authSession ? "Supabase notifications are not connected yet." : "You are all caught up in this demo.")}><Bell size={19} /></button>
+            {authSession && profile
+              ? <details className="profile-menu"><summary className="profile-menu-trigger"><span className="profile-avatar">{(profile.display_name || authSession.user.email || "U").slice(0, 1).toUpperCase()}</span><span className="profile-menu-copy"><strong>{profile.display_name || authSession.user.email}</strong><small>{role} account</small></span><ChevronDown size={15} /></summary><div className="profile-menu-panel"><strong>{profile.display_name || "Marketplace user"}</strong><span>{authSession.user.email}</span><span className="auth-role-pill">DATABASE ROLE - {role}</span><button type="button" className="btn btn-light btn-small" onClick={signOut} disabled={authBusy}>{authBusy ? "Signing out..." : "Sign out"}</button></div></details>
+              : <div className="role-picker"><Users size={17} /><select value={demoRole} onChange={e => { setDemoRole(e.target.value); setSection("overview"); setQuery(""); setStatusFilter("All statuses"); setCategoryFilter("All categories"); setLocationFilter("All locations"); }} aria-label="Choose demo dashboard"><option>Collector</option><option>Recycler</option><option>Admin</option></select><ChevronDown size={14} /></div>}
+            {!authSession && <button type="button" className="btn btn-light btn-small demo-sign-in" onClick={() => setDemoAccess(false)}>Sign in</button>}
+          </div>
+        </header>
+
+        <div className="content">
+          {authSession && marketplaceError && connectedData && <div className="marketplace-refresh-warning" role="alert"><span>Marketplace data may be out of date: {marketplaceError}</span><button type="button" className="btn btn-light btn-small" onClick={() => setReloadToken(value => value + 1)} disabled={marketplaceRefreshing}>{marketplaceRefreshing ? "Refreshing…" : "Retry refresh"}</button></div>}
+          {authSession && connectedData?.ancillaryErrors?.includes("pickup_appointments") && <div className="marketplace-refresh-warning" role="status"><span>Pickup coordination data could not be loaded. Check that the follow-up migration and authenticated read access are configured; marketplace lots and offers remain available.</span><button type="button" className="btn btn-light btn-small" onClick={() => setReloadToken(value => value + 1)} disabled={marketplaceRefreshing}>{marketplaceRefreshing ? "Refreshing…" : "Retry refresh"}</button></div>}
           <section className="welcome-row" id="overview">
-            <div><div className="eyebrow"><Sparkles size={14} /> {role.toUpperCase()} {authSession ? "CONNECTED DASHBOARD" : "DEMO DASHBOARD"}</div><h1>{role === "Collector" ? "Manage your e-waste lots" : role === "Recycler" ? "Find lots to recycle" : "Marketplace monitoring"}</h1><p>{authSession ? role === "Collector" ? "Records are loaded from Supabase. You can create lots and accept or reject incoming offers; later workflow updates are not connected yet." : role === "Recycler" ? "Records are loaded from Supabase. You can browse lots and submit offers; workflow updates are not connected yet." : "Records are loaded from Supabase. Admin workflow changes use the database RPC and its authorization checks." : "Local demo data only. The role selector changes this view; it does not sign you in or enforce secure permissions."}</p></div>
-            <div className="welcome-actions">{!authSession && <button className="btn btn-light" onClick={exportData}><Download size={16} /> Export data</button>}{role === "Collector" && <button className="btn btn-primary" onClick={() => { setFormError(""); setShowForm(true); }}><Plus size={17} /> {authSession ? "Create Lot" : "Add e-waste lot"}</button>}</div>
+            <div><div className="eyebrow"><Sparkles size={14} /> {role.toUpperCase()} {authSession ? "CONNECTED WORKSPACE" : "DEMO WORKSPACE"}</div><h1>{workspaceTitle}</h1><p>{workspaceDescription}</p></div>
+            <div className="welcome-actions">{!authSession && ["overview", "lots"].includes(currentSection) && <button className="btn btn-light" onClick={exportData}><Download size={16} /> Export data</button>}{role === "Collector" && ["overview", "lots"].includes(currentSection) && <button className="btn btn-primary" onClick={() => { setFormError(""); setShowForm(true); }}><Plus size={17} /> {authSession ? "Create Lot" : "Add e-waste lot"}</button>}</div>
           </section>
-          <nav className="dashboard-nav" aria-label={`${role} dashboard sections`}>
-            {navigation.map(item => <button key={item.key} type="button" className={`dashboard-tab ${currentSection === item.key ? "selected" : ""}`} aria-current={currentSection === item.key ? "page" : undefined} onClick={() => setSection(item.key)}><span className="dashboard-tab-icon" aria-hidden="true">{item.icon}</span><span>{item.label}</span></button>)}
-          </nav>
-          <section className="stats-grid">
+          <section className={`stats-grid ${["pricing", "settings", "activity"].includes(currentSection) ? "stats-grid-hidden" : ""}`}>
             {(role === "Collector" ? collectorStats : role === "Recycler" ? recyclerStats : adminStats).map(stat => <StatCard key={stat.label} {...stat} />)}
           </section>
-          {currentSection === "activity" ? <ActivityPanel activity={viewData.activity} workflowEvents={viewData.workflowEvents} lots={viewData.lots} connected={Boolean(authSession)} ancillaryErrors={connectedData?.ancillaryErrors || []} onRetry={() => setReloadToken(value => value + 1)} retrying={marketplaceState === "loading"} /> : role === "Collector" ? <CollectorDashboard lots={visibleLots.filter(lot => authSession ? lot.collectorId === authSession.user.id : lot.collector === DEMO_COLLECTOR)} allLotCount={collectorLots.length} query={query} setQuery={setQuery} onAdd={() => setShowForm(true)} onDecision={decideOffer} decisionBusyOfferId={decisionBusyOfferId} readOnly={Boolean(authSession)} /> : role === "Recycler" ? currentSection === "my-offers" ? <RecyclerOffers offers={myOffers} connected={Boolean(authSession)} /> : <RecyclerDashboard lots={visibleLots.filter(lot => ["Open", "Offer submitted"].includes(lot.status))} query={query} setQuery={setQuery} categoryFilter={categoryFilter} setCategoryFilter={setCategoryFilter} locationFilter={locationFilter} setLocationFilter={setLocationFilter} statusFilter={statusFilter} setStatusFilter={setStatusFilter} categories={categories} locations={locations} myOffers={myOffers} currentRecyclerId={authSession?.user?.id} readOnly={Boolean(authSession)} onOffer={lot => { setOfferLot(lot); setOfferPrice(""); setOfferMessage(""); setOfferError(""); }} /> : <AdminDashboard lots={visibleLots} query={query} setQuery={setQuery} statusFilter={statusFilter} setStatusFilter={setStatusFilter} evidenceDrafts={evidenceDrafts} setEvidenceDrafts={setEvidenceDrafts} disputeDrafts={disputeDrafts} setDisputeDrafts={setDisputeDrafts} onTransition={transitionLot} onConnectedTransition={handleAdminTransition} busyLotId={workflowBusyLotId} canManage={Boolean(authSession && profile?.role === "admin")} readOnly={Boolean(authSession)} />}
+          {currentSection === "pricing" ? <PricingWorkspace />
+            : currentSection === "settings" ? <SettingsWorkspace session={authSession} profile={profile} role={role} onSignOut={signOut} onReturnToSignIn={() => setDemoAccess(false)} />
+              : currentSection === "activity" ? <ActivityPanel activity={viewData.activity} workflowEvents={viewData.workflowEvents} lots={viewData.lots} connected={Boolean(authSession)} ancillaryErrors={connectedData?.ancillaryErrors || []} onRetry={() => setReloadToken(value => value + 1)} retrying={marketplaceState === "loading"} />
+                : currentSection === "overview" ? <DashboardOverview role={role} connected={Boolean(authSession)} onNavigate={setSection} onAdd={() => { setFormError(""); setShowForm(true); }} />
+                  : role === "Collector" ? <CollectorDashboard lots={visibleLots.filter(lot => authSession ? lot.collectorId === authSession.user.id : lot.collector === DEMO_COLLECTOR)} allLotCount={collectorLots.length} query={query} setQuery={setQuery} onAdd={() => setShowForm(true)} onDecision={decideOffer} decisionBusyOfferId={decisionBusyOfferId} pickupAppointmentsByLot={pickupAppointmentsByLot} pickupCoordinationAvailable={!authSession || !connectedData?.ancillaryErrors?.includes("pickup_appointments")} pickupBusyLotId={pickupBusyLotId} onProposePickup={proposePickupTime} readOnly={Boolean(authSession)} />
+                  : role === "Recycler" ? currentSection === "my-offers" ? <RecyclerOffers offers={myOffers} connected={Boolean(authSession)} pickupAppointmentsByLot={pickupAppointmentsByLot} pickupCoordinationAvailable={!authSession || !connectedData?.ancillaryErrors?.includes("pickup_appointments")} pickupBusyLotId={pickupBusyLotId} onRespondPickup={respondToPickupTime} /> : <RecyclerDashboard lots={visibleLots.filter(lot => ["Open", "Offer submitted"].includes(lot.status))} query={query} setQuery={setQuery} categoryFilter={categoryFilter} setCategoryFilter={setCategoryFilter} locationFilter={locationFilter} setLocationFilter={setLocationFilter} statusFilter={statusFilter} setStatusFilter={setStatusFilter} categories={categories} locations={locations} myOffers={myOffers} currentRecyclerId={authSession?.user?.id} readOnly={Boolean(authSession)} onOffer={lot => { setOfferLot(lot); setOfferPrice(""); setOfferMessage(""); setOfferError(""); }} />
+                    : <AdminDashboard lots={visibleLots} query={query} setQuery={setQuery} statusFilter={statusFilter} setStatusFilter={setStatusFilter} evidenceDrafts={evidenceDrafts} setEvidenceDrafts={setEvidenceDrafts} disputeDrafts={disputeDrafts} setDisputeDrafts={setDisputeDrafts} onTransition={transitionLot} onConnectedTransition={handleAdminTransition} busyLotId={workflowBusyLotId} pickupAppointmentsByLot={pickupAppointmentsByLot} canManage={Boolean(authSession && profile?.role === "admin")} readOnly={Boolean(authSession)} />}
           <footer className="footer"><span>© 2026 Scarap_Yukti · Prototype workspace</span><span>{authSession ? "Supabase reads, Collector lot creation and offer decisions, Recycler offers, and Admin workflow RPC actions." : "Simulated workflow and recycling evidence; no verified recycler service."}</span></footer>
         </div>
       </main>
@@ -819,6 +1035,52 @@ function PasswordRecoveryGate({ password, setPassword, confirmPassword, setConfi
       <div className="auth-form-actions"><button className="btn btn-primary" type="submit" disabled={busy}>{busy ? "Updating…" : "Update password"}</button><button className="btn btn-light" type="button" onClick={onSignOut} disabled={busy}>Sign out</button></div>
     </form>
   </section></div>;
+}
+
+function DashboardOverview({ role, connected, onNavigate, onAdd }) {
+  const content = role === "Collector"
+    ? { title: "Your collection workspace", detail: "Create a scrap request, review incoming recycler offers, and follow pickup and recycling progress.", actions: [{ label: "View scrap requests", section: "lots", icon: <Package size={17} /> }, { label: "Review history", section: "activity", icon: <ClipboardList size={17} /> }] }
+    : role === "Recycler"
+      ? { title: "Find your next material lot", detail: "Browse available scrap requests, submit offers, and track collector decisions in one workspace.", actions: [{ label: "Browse scrap requests", section: "lots", icon: <Search size={17} /> }, { label: "View my offers", section: "my-offers", icon: <Wallet size={17} /> }] }
+      : { title: "Marketplace operations", detail: "Monitor visible lots and offers, review workflow progress, and use the authorized Admin workflow controls where available.", actions: [{ label: "Open marketplace requests", section: "lots", icon: <Package size={17} /> }, { label: "View history", section: "activity", icon: <ClipboardList size={17} /> }] };
+
+  return <section className="panel dashboard-panel dashboard-overview" aria-labelledby="dashboard-overview-title">
+    <div className="panel-heading"><div><h2 id="dashboard-overview-title">{content.title}</h2><p>{content.detail}</p></div><span className={connected ? "connected-label" : "demo-label"}>{connected ? "CONNECTED" : "LOCAL DEMO"}</span></div>
+    <div className="dashboard-shortcuts">{role === "Collector" && <button type="button" className="shortcut-card shortcut-primary" onClick={onAdd}><span className="shortcut-icon"><Plus size={18} /></span><span><strong>Create a scrap request</strong><small>{connected ? "Post a lot from your Collector account" : "Save a lot in this browser demo"}</small></span></button>}{content.actions.map(action => <button type="button" className="shortcut-card" key={action.section} onClick={() => onNavigate(action.section)}><span className="shortcut-icon">{action.icon}</span><span><strong>{action.label}</strong><small>Open this workspace section</small></span><ChevronDown className="shortcut-arrow" size={16} /></button>)}</div>
+    <p className="dashboard-disclaimer">{connected ? "Records and available actions are governed by your database profile and Supabase policies." : "Demo role selection only changes the local view; it does not grant account permissions."}</p>
+  </section>;
+}
+
+function PricingWorkspace() {
+  const [weight, setWeight] = useState("");
+  const [rate, setRate] = useState("");
+  const total = Number(weight) * Number(rate);
+  const hasEstimate = Number(weight) > 0 && Number(rate) > 0 && Number.isFinite(total);
+
+  return <section className="pricing-workspace panel dashboard-panel" aria-labelledby="pricing-title">
+    <div className="panel-heading"><div><h2 id="pricing-title">Estimate a lot total</h2><p>Enter an estimated weight and a rate supplied by you or your recycler.</p></div><span className="demo-label warning">INDICATIVE ONLY</span></div>
+    <div className="pricing-layout">
+      <div className="pricing-inputs">
+        <label>Estimated weight<input type="number" min="0.1" max="100000" step="0.1" inputMode="decimal" value={weight} onChange={event => setWeight(event.target.value)} placeholder="For example, 25" /></label>
+        <label>Rate per kg (INR)<input type="number" min="0.01" max="1000000000" step="0.01" inputMode="decimal" value={rate} onChange={event => setRate(event.target.value)} placeholder="Enter a rate" /></label>
+        <p>Calculation: weight x your rate. This is not a marketplace price, binding quote, or payment commitment.</p>
+      </div>
+      <div className="pricing-result" aria-live="polite"><span>Illustrative total</span><strong>{hasEstimate ? money(total) : money(0)}</strong><small>{hasEstimate ? `${Number(weight).toLocaleString("en-IN")} kg x ${money(Number(rate))}/kg` : "Enter both values to calculate"}</small></div>
+    </div>
+  </section>;
+}
+
+function SettingsWorkspace({ session, profile, role, onSignOut, onReturnToSignIn }) {
+  return <section className="panel dashboard-panel settings-workspace" aria-labelledby="settings-title">
+    <div className="panel-heading"><div><h2 id="settings-title">Account and workspace</h2><p>Review the account currently open in this browser.</p></div><span className={session ? "connected-label" : "demo-label"}>{session ? "SUPABASE ACCOUNT" : "LOCAL DEMO"}</span></div>
+    <div className="settings-grid">
+      <article><span>Account</span><strong>{session ? profile?.display_name || session.user.email : "Scarap_Yukti demo"}</strong><small>{session?.user?.email || "No signed-in account"}</small></article>
+      <article><span>Dashboard role</span><strong>{role}</strong><small>{session ? "Loaded from your database profile" : "Demo view only; this is not an authorization role"}</small></article>
+      <article><span>Data workspace</span><strong>{session ? "Supabase connected" : "This browser only"}</strong><small>{session ? "Visible rows and actions follow database policies" : "Demo records are not shared with other users or devices"}</small></article>
+    </div>
+    <div className="settings-notice"><ShieldCheck size={17} /><span>Role changes and account verification are not managed from this screen. Connected permissions are checked by Supabase policies and workflow functions.</span></div>
+    <div className="settings-actions">{session ? <button type="button" className="btn btn-light" onClick={onSignOut}>Sign out</button> : <button type="button" className="btn btn-light" onClick={onReturnToSignIn}>Return to sign in</button>}</div>
+  </section>;
 }
 
 function AuthPanel({ configured, session, profile, mode, setMode, form, setForm, onSubmit, onForgotPassword, onSignOut, busy, message, messageType }) {
@@ -932,7 +1194,7 @@ function LotFilters({ query, setQuery, statusFilter, setStatusFilter, categories
   </div>;
 }
 
-function CollectorDashboard({ lots, allLotCount, query, setQuery, onAdd, onDecision, decisionBusyOfferId, readOnly = false }) {
+function CollectorDashboard({ lots, allLotCount, query, setQuery, onAdd, onDecision, decisionBusyOfferId, pickupAppointmentsByLot, pickupCoordinationAvailable, pickupBusyLotId, onProposePickup, readOnly = false }) {
   return <section className="panel dashboard-panel"><div className="panel-heading"><div><h2>My e-waste lots</h2><p>{readOnly ? "Supabase lot and offer records. Accept/reject decisions are checked by the database; other workflow updates are not connected." : "Compare recycler offers, then accept or reject each pending offer."}</p></div><span className={readOnly ? "connected-label" : "demo-label"}>{readOnly ? "CONNECTED COLLECTOR" : "DEMO COLLECTOR"}</span></div>
     <div className="filters role-filters"><div className="search-box"><Search size={17} /><input value={query} onChange={e => setQuery(e.target.value)} placeholder="Search my lots..." aria-label="Search my lots" /></div><span className="filters-note">Showing {lots.length} of {allLotCount} lots</span></div>
     {lots.length ? <div className="lot-card-list">{lots.map(lot => <article className="workflow-card" key={lot.id}>
@@ -940,6 +1202,7 @@ function CollectorDashboard({ lots, allLotCount, query, setQuery, onAdd, onDecis
       <div className="lot-meta-grid"><span><strong>{lot.weight} kg</strong><small>Estimated weight</small></span><span><MapPin size={14} /> {lot.location}<small>Approximate pickup area</small></span><span><strong>{shortDate(lot.date)}</strong><small>Created</small></span></div>
       {lot.notes && <p className="lot-notes">{lot.notes}</p>}
       <div className="workflow-progress"><span>Pickup and recycling status</span><strong>{statusLabel(lot.status)}</strong><ProgressTrack status={lot.status} /></div>
+      {lot.status === "Pickup scheduled" && lot.offers.some(offer => offer.status === "accepted") && <PickupCoordination role="collector" lot={lot} appointment={pickupAppointmentsByLot.get(lot.id)} available={pickupCoordinationAvailable} busy={pickupBusyLotId === lot.id} connected={readOnly} onPropose={onProposePickup} />}
       {lot.status === "Recycling review" && lot.evidence && <div className="evidence-note"><ShieldCheck size={15} /><div><strong>{readOnly ? "Evidence/review note · not independently verified" : "Demo evidence submitted"}</strong><span>{lot.evidence}</span></div></div>}
       <div className="offers-heading"><strong>Offers received ({lot.offers.length})</strong><span>Compare amounts and terms before deciding</span></div>
       {lot.offers.length ? <div className="offer-grid">{lot.offers.slice().sort((a, b) => b.price - a.price).map(offer => <article className={`offer-card ${offer.status}`} key={offer.id}><div className="offer-card-top"><strong>{offer.recycler}</strong><OfferStatusPill status={offer.status} /></div><div className="offer-price">{money(offer.price)}</div><p>{offer.message || "No message provided."}</p>{offer.status === "pending" && lot.status === "Offer submitted" ? <div className="offer-actions"><button className="btn btn-light btn-small" disabled={Boolean(decisionBusyOfferId)} onClick={() => onDecision(lot.id, offer.id, "rejected")}>{decisionBusyOfferId === offer.id ? "Saving…" : "Reject"}</button><button className="btn btn-primary btn-small" disabled={Boolean(decisionBusyOfferId)} onClick={() => onDecision(lot.id, offer.id, "accepted")}>{decisionBusyOfferId === offer.id ? "Saving…" : "Accept offer"}</button></div> : null}</article>)}</div> : <EmptyState title="No offers yet" detail="Recycler offers will appear here for comparison." compact />}
@@ -949,7 +1212,7 @@ function CollectorDashboard({ lots, allLotCount, query, setQuery, onAdd, onDecis
 
 function RecyclerDashboard({ lots, query, setQuery, categoryFilter, setCategoryFilter, locationFilter, setLocationFilter, statusFilter, setStatusFilter, categories, locations, myOffers, currentRecyclerId, readOnly = false, onOffer }) {
   return <section className="panel dashboard-panel"><div className="panel-heading"><div><h2>Available lots</h2><p>{readOnly ? "Browse lots visible to your account and submit one offer per lot." : "Browse open lots and submit one offer per lot as the demo recycler."}</p></div><span className={readOnly ? "connected-label" : "demo-label"}>{readOnly ? "CONNECTED RECYCLER" : "DEMO RECYCLER"}</span></div>
-    <div className="inline-hint"><ShieldCheck size={15} /> Lot locations and notes are listing details, not private contact fields. After an offer is accepted, pickup must be coordinated separately; this app does not schedule or confirm an appointment.</div>
+    <div className="inline-hint"><ShieldCheck size={15} /> Lot locations and notes are listing details, not private contact fields. After an offer is accepted, the Collector may propose a time and the accepted Recycler can respond when the pickup-coordination migration is enabled.</div>
     {readOnly && <div className="inline-hint"><ShieldCheck size={15} /> Offer rows follow the database policy: recyclers can see their own offers; offers on lots they do not own may not be visible.</div>}
     <LotFilters query={query} setQuery={setQuery} statusFilter={statusFilter} setStatusFilter={setStatusFilter} categories={categories} categoryFilter={categoryFilter} setCategoryFilter={setCategoryFilter} locations={locations} locationFilter={locationFilter} setLocationFilter={setLocationFilter} includeCategory includeLocation />
     {lots.length ? <div className="lot-card-list">{lots.map(lot => { const submitted = lot.offers.find(offer => currentRecyclerId ? offer.recyclerId === currentRecyclerId : offer.recycler === DEMO_RECYCLER); return <article className="workflow-card recycler-lot" key={lot.id}>
@@ -962,13 +1225,13 @@ function RecyclerDashboard({ lots, query, setQuery, categoryFilter, setCategoryF
   </section>;
 }
 
-function RecyclerOffers({ offers, connected = false }) {
+function RecyclerOffers({ offers, connected = false, pickupAppointmentsByLot, pickupCoordinationAvailable, pickupBusyLotId, onRespondPickup }) {
   return <section className="panel dashboard-panel"><div className="panel-heading"><div><h2>My submitted offers</h2><p>Follow collector decisions and the associated lot workflow.</p></div><span className={connected ? "connected-label" : "demo-label"}>{connected ? "CONNECTED RECYCLER" : "DEMO RECYCLER"}</span></div>
-    {offers.length ? <div className="lot-card-list">{offers.map(offer => <article className="workflow-card compact-card" key={offer.id}><div className="offer-card-top"><div><strong>{offer.lot.title}</strong><small>{offer.lot.id} · {offer.lot.category} · {offer.lot.location}</small></div><OfferStatusPill status={offer.status} /></div><div className="submitted-offer-details"><span className="offer-price">{money(offer.price)}</span><span>Lot status <StatusPill status={offer.lot.status} /></span></div><p className="lot-notes">{offer.message}</p></article>)}</div> : <EmptyState title="No offers submitted" detail={connected ? "Submit an offer from an available lot to see it here." : "Browse available lots and submit a demo offer to see it here."} />}
+    {offers.length ? <div className="lot-card-list">{offers.map(offer => <article className="workflow-card compact-card" key={offer.id}><div className="offer-card-top"><div><strong>{offer.lot.title}</strong><small>{offer.lot.id} · {offer.lot.category} · {offer.lot.location}</small></div><OfferStatusPill status={offer.status} /></div><div className="submitted-offer-details"><span className="offer-price">{money(offer.price)}</span><span>Lot status <StatusPill status={offer.lot.status} /></span></div><p className="lot-notes">{offer.message}</p>{offer.status === "accepted" && offer.lot.status === "Pickup scheduled" && <PickupCoordination role="recycler" lot={offer.lot} appointment={pickupAppointmentsByLot.get(offer.lot.id)} available={pickupCoordinationAvailable} busy={pickupBusyLotId === offer.lot.id} connected={connected} onRespond={onRespondPickup} />}</article>)}</div> : <EmptyState title="No offers submitted" detail={connected ? "Submit an offer from an available lot to see it here." : "Browse available lots and submit a demo offer to see it here."} />}
   </section>;
 }
 
-function AdminDashboard({ lots, query, setQuery, statusFilter, setStatusFilter, evidenceDrafts, setEvidenceDrafts, disputeDrafts, setDisputeDrafts, onTransition, onConnectedTransition, busyLotId, canManage = false, readOnly = false }) {
+function AdminDashboard({ lots, query, setQuery, statusFilter, setStatusFilter, evidenceDrafts, setEvidenceDrafts, disputeDrafts, setDisputeDrafts, onTransition, onConnectedTransition, busyLotId, pickupAppointmentsByLot, canManage = false, readOnly = false }) {
   const runTransition = (lotId, nextStatus, demoStatus, note = "") => readOnly
     ? onConnectedTransition(lotId, nextStatus, demoStatus, note)
     : onTransition(lotId, demoStatus, note);
@@ -982,6 +1245,7 @@ function AdminDashboard({ lots, query, setQuery, statusFilter, setStatusFilter, 
     {lots.length ? <div className="lot-card-list">{lots.map(lot => <article className="workflow-card" key={lot.id}>
       <LotHeading lot={lot} /><div className="admin-lot-topline"><span>Collector: {lot.collector || DEMO_COLLECTOR}</span><span>{lot.weight} kg · {lot.location}</span></div>
       <ProgressTrack status={lot.status} />
+      {pickupAppointmentsByLot.get(lot.id) && <div className="pickup-summary"><strong>Pickup appointment · {pickupAppointmentsByLot.get(lot.id).status.replaceAll("_", " ")}</strong><span>{new Date(pickupAppointmentsByLot.get(lot.id).scheduledAt).toLocaleString()} · coordination record only</span></div>}
       <div className="admin-offers"><strong>Offers ({lot.offers.length})</strong>{lot.offers.length ? lot.offers.map(offer => <div className="admin-offer-row" key={offer.id}><span><strong>{offer.recycler}</strong><small>{offer.message}</small></span><b>{money(offer.price)}</b><OfferStatusPill status={offer.status} /></div>) : <p>No offers submitted.</p>}</div>
       {(!readOnly || canManage) && lot.status === "Pickup scheduled" && <div className="admin-action-row"><span>{readOnly ? "Coordinate pickup separately; mark collected only after handover has happened." : "No appointment is scheduled by this demo. Record collection only after the demo handover."}</span><button className="btn btn-light btn-small" disabled={disabled(lot.id)} onClick={() => runTransition(lot.id, "collected", "Collected")}>{busy(lot.id) ? "Saving…" : "Mark collected"}</button></div>}
       {(!readOnly || canManage) && lot.status === "Collected" && <div className="evidence-entry"><label>{readOnly ? "Evidence / review note (10–500 characters)" : "Demo recycling evidence / review notes"}<textarea rows="2" minLength="10" maxLength="500" value={evidenceDrafts[lot.id] || ""} onChange={e => setEvidenceDrafts(prev => ({ ...prev, [lot.id]: e.target.value }))} placeholder="Describe the evidence or review note" /></label><button className="btn btn-primary btn-small" disabled={disabled(lot.id)} onClick={() => runTransition(lot.id, "recycling_review", "Recycling review", evidenceDrafts[lot.id] || "")}>{busy(lot.id) ? "Saving…" : "Submit for recycling review"}</button></div>}
@@ -990,6 +1254,77 @@ function AdminDashboard({ lots, query, setQuery, statusFilter, setStatusFilter, 
       {canManage && disputeStatuses.includes(lot.status) && <div className="evidence-entry"><label>Dispute reason (10–500 characters)<textarea rows="2" minLength="10" maxLength="500" value={disputeDrafts[lot.id] || ""} onChange={e => setDisputeDrafts(prev => ({ ...prev, [lot.id]: e.target.value }))} placeholder="Explain why this lot needs Admin review" /></label><button className="btn btn-light btn-small" disabled={disabled(lot.id)} onClick={() => runTransition(lot.id, "disputed", "Disputed", disputeDrafts[lot.id] || "")}>{busy(lot.id) ? "Saving…" : "Flag for review"}</button></div>}
       {canManage && lot.status === "Disputed" && <div className="admin-action-row"><span>Workflow paused for Admin review. The original status is saved by the database.</span><button className="btn btn-light btn-small" disabled={disabled(lot.id)} onClick={() => runTransition(lot.id, "resume", "Open")}>{busy(lot.id) ? "Saving…" : "Resume workflow"}</button></div>}
     </article>)}</div> : <EmptyState title="No lots match these filters" detail="Clear or change the filters to see marketplace records." />}
+  </section>;
+}
+
+function PickupCoordination({ role, lot, appointment, available, busy, connected, onPropose, onRespond }) {
+  const [timeValue, setTimeValue] = useState(() => {
+    const suggested = new Date(Date.now() + 24 * 60 * 60 * 1000);
+    suggested.setMinutes(0, 0, 0);
+    return new Date(suggested.getTime() - suggested.getTimezoneOffset() * 60_000).toISOString().slice(0, 16);
+  });
+  const [pickupNote, setPickupNote] = useState("");
+  const [responseNote, setResponseNote] = useState("");
+  const [localError, setLocalError] = useState("");
+  const [pendingDecision, setPendingDecision] = useState("");
+  const submitProposal = async event => {
+    event.preventDefault();
+    const date = new Date(timeValue);
+    if (Number.isNaN(date.getTime())) {
+      setLocalError("Choose a valid pickup date and time.");
+      return;
+    }
+    const result = await onPropose(lot.id, date.toISOString(), pickupNote);
+    if (result) {
+      setPickupNote("");
+      setLocalError("");
+    }
+  };
+  const submitResponse = async decision => {
+    setPendingDecision(decision);
+    const result = await onRespond(lot.id, decision, responseNote);
+    if (result) {
+      setResponseNote("");
+      setLocalError("");
+    }
+    setPendingDecision("");
+  };
+  const dateLabel = appointment?.scheduledAt
+    ? new Date(appointment.scheduledAt).toLocaleString("en-IN", { dateStyle: "medium", timeStyle: "short" })
+    : "";
+  const canPropose = !appointment || appointment.status === "reschedule_requested";
+  const submitReschedule = () => {
+    const validation = validateRescheduleRequest(responseNote);
+    if (!validation.ok) {
+      setLocalError("Explain the requested change in 10 to 500 characters.");
+      return;
+    }
+    setLocalError("");
+    submitResponse("request_reschedule");
+  };
+
+  return <section className="pickup-coordination" aria-label="Pickup appointment coordination">
+    <div className="pickup-copy"><strong>Pickup coordination</strong><span>{connected ? "An accepted offer does not itself confirm a pickup time." : "Local demo only; this is not a confirmed real-world pickup."}</span></div>
+    {appointment && <div className={`pickup-summary ${appointment.status}`}><strong>{appointment.status === "confirmed" ? "Time confirmed by both accounts" : appointment.status === "reschedule_requested" ? "Recycler requested a different time" : "Awaiting Recycler response"}</strong><span>{dateLabel}</span>{appointment.proposedNote && <span>Collector note: {appointment.proposedNote}</span>}{appointment.responseNote && <span>Recycler response: {appointment.responseNote}</span>}</div>}
+    {connected && !available && <p className="pickup-waiting" role="status">Appointment data could not be loaded. Retry the marketplace refresh before taking a pickup action.</p>}
+    {available && role === "collector" && canPropose && <form className="pickup-form" onSubmit={submitProposal}>
+      <label>Propose a pickup date and time<input type="datetime-local" required value={timeValue} disabled={busy} onChange={event => { setTimeValue(event.target.value); setLocalError(""); }} /></label>
+      <label>Coordination note (optional)<textarea rows="2" maxLength="500" disabled={busy} value={pickupNote} onChange={event => { setPickupNote(event.target.value); setLocalError(""); }} placeholder="Share a brief operational note" /></label>
+      {localError && <span className="pickup-error" role="alert">{localError}</span>}
+      <p>Keep notes operational. Do not enter private contact details or an exact home address.</p>
+      <button className="btn btn-primary btn-small" type="submit" disabled={busy}>{busy ? "Saving…" : appointment ? "Propose new time" : "Propose pickup time"}</button>
+    </form>}
+    {available && role === "recycler" && appointment?.status === "proposed" && <div className="pickup-form">
+      <label>Response note (optional for confirmation)<textarea rows="2" maxLength="500" disabled={busy} value={responseNote} onChange={event => { setResponseNote(event.target.value); setLocalError(""); }} placeholder="Optional coordination response" /></label>
+      {localError && <span className="pickup-error" role="alert">{localError}</span>}
+      <p>Confirm only if this proposed time works for you. Confirmation records agreement; it does not prove collection.</p>
+      <div className="pickup-actions"><button className="btn btn-light btn-small" type="button" onClick={submitReschedule} disabled={busy}>{busy && pendingDecision === "request_reschedule" ? "Sending…" : "Request another time"}</button><button className="btn btn-primary btn-small" type="button" onClick={() => submitResponse("confirm")} disabled={busy}>{busy && pendingDecision === "confirm" ? "Saving…" : "Confirm time"}</button></div>
+    </div>}
+    {available && role === "recycler" && appointment?.status === "reschedule_requested" && <p className="pickup-waiting">Waiting for the Collector to propose another time.</p>}
+    {available && role === "collector" && appointment?.status === "proposed" && <p className="pickup-waiting">The proposal has been sent. The accepted Recycler must respond before a time is confirmed.</p>}
+    {available && role === "collector" && appointment?.status === "confirmed" && <p className="pickup-waiting">The proposed time was confirmed. Mark the lot collected only after the handover actually happens.</p>}
+    {available && !appointment && role === "recycler" && <p className="pickup-waiting">The Collector has not proposed a pickup time yet.</p>}
+    {!connected && <span className="pickup-demo-tag">LOCAL DEMO · SAVED IN THIS BROWSER</span>}
   </section>;
 }
 

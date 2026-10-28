@@ -13,6 +13,7 @@ test("ancillary history results retain rows when both queries succeed", () => {
   assert.deepEqual(collectAncillaryReadResults(fulfilled(activity), fulfilled(workflow)), {
     activityRows: activity,
     workflowRows: workflow,
+    pickupAppointmentRows: [],
     ancillaryErrors: []
   });
 });
@@ -27,6 +28,7 @@ test("one history query failure is reported without discarding the other history
   assert.deepEqual(result, {
     activityRows: [],
     workflowRows: workflow,
+    pickupAppointmentRows: [],
     ancillaryErrors: ["activity"]
   });
 });
@@ -40,6 +42,7 @@ test("query errors and malformed ancillary responses are not treated as successf
   assert.deepEqual(result, {
     activityRows: [],
     workflowRows: [],
+    pickupAppointmentRows: [],
     ancillaryErrors: ["activity", "workflow"]
   });
 });
@@ -48,6 +51,18 @@ test("empty successful history results remain distinguishable from failures", ()
   assert.deepEqual(collectAncillaryReadResults(fulfilled([]), fulfilled([])), {
     activityRows: [],
     workflowRows: [],
+    pickupAppointmentRows: [],
     ancillaryErrors: []
+  });
+});
+
+test("pickup appointment read failures are reported separately from successful history rows", () => {
+  const activity = [{ id: 1 }];
+  const appointmentFailure = { status: "rejected", reason: new Error("table unavailable") };
+  assert.deepEqual(collectAncillaryReadResults(fulfilled(activity), fulfilled([]), appointmentFailure), {
+    activityRows: activity,
+    workflowRows: [],
+    pickupAppointmentRows: [],
+    ancillaryErrors: ["pickup_appointments"]
   });
 });
