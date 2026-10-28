@@ -8,6 +8,7 @@ import { hasSupabaseConfig, supabase } from "./lib/supabase.js";
 import { loadMarketplaceSnapshot } from "./lib/marketplaceReads.js";
 import { subscribeToMarketplaceChanges } from "./lib/marketplaceRealtime.js";
 import { raiseDispute, recordHandoverWeight } from "./lib/lotActions.js";
+import { getTraceabilityActionState } from "./lib/traceabilityView.js";
 import { applyDemoWorkflowTransition, decideDemoOffer } from "./lib/workflowRules.js";
 import { normalizeDemoPickupAppointment, respondToDemoPickupAppointment, validatePickupSchedule, validateRescheduleRequest } from "./lib/pickupAppointmentRules.js";
 
@@ -581,6 +582,7 @@ export default function App() {
       notify(kind === "weight"
         ? "Handover weight recorded. A difference above 10% is flagged for Admin review."
         : "Dispute raised. An Admin can review the lot. Refreshing marketplace data.");
+      return true;
     } catch (error) {
       notify(error.message || "The action could not be saved.", "error");
       return false;
@@ -1015,9 +1017,9 @@ export default function App() {
             : currentSection === "settings" ? <SettingsWorkspace session={authSession} profile={profile} role={role} onSignOut={signOut} onReturnToSignIn={() => setDemoAccess(false)} />
               : currentSection === "activity" ? <ActivityPanel activity={viewData.activity} workflowEvents={viewData.workflowEvents} lots={viewData.lots} connected={Boolean(authSession)} ancillaryErrors={connectedData?.ancillaryErrors || []} onRetry={() => setReloadToken(value => value + 1)} retrying={marketplaceState === "loading"} />
                 : currentSection === "overview" ? <DashboardOverview role={role} connected={Boolean(authSession)} onNavigate={setSection} onAdd={() => { setFormError(""); setShowForm(true); }} />
-                  : role === "Collector" ? <CollectorDashboard {...traceProps} lots={visibleLots.filter(lot => authSession ? lot.collectorId === authSession.user.id : lot.collector === DEMO_COLLECTOR)} allLotCount={collectorLots.length} query={query} setQuery={setQuery} onAdd={() => setShowForm(true)} onDecision={decideOffer} decisionBusyOfferId={decisionBusyOfferId} pickupAppointmentsByLot={pickupAppointmentsByLot} pickupCoordinationAvailable={!authSession || !connectedData?.ancillaryErrors?.includes("pickup_appointments")} pickupBusyLotId={pickupBusyLotId} onProposePickup={proposePickupTime} readOnly={Boolean(authSession)} />
-                  : role === "Recycler" ? currentSection === "my-offers" ? <RecyclerOffers {...traceProps} offers={myOffers} connected={Boolean(authSession)} pickupAppointmentsByLot={pickupAppointmentsByLot} pickupCoordinationAvailable={!authSession || !connectedData?.ancillaryErrors?.includes("pickup_appointments")} pickupBusyLotId={pickupBusyLotId} onRespondPickup={respondToPickupTime} /> : <RecyclerDashboard lots={visibleLots.filter(lot => ["Open", "Offer submitted"].includes(lot.status))} query={query} setQuery={setQuery} categoryFilter={categoryFilter} setCategoryFilter={setCategoryFilter} locationFilter={locationFilter} setLocationFilter={setLocationFilter} statusFilter={statusFilter} setStatusFilter={setStatusFilter} categories={categories} locations={locations} myOffers={myOffers} currentRecyclerId={authSession?.user?.id} readOnly={Boolean(authSession)} onOffer={lot => { setOfferLot(lot); setOfferPrice(""); setOfferMessage(""); setOfferError(""); }} />
-                    : <AdminDashboard {...traceProps} lots={visibleLots} query={query} setQuery={setQuery} statusFilter={statusFilter} setStatusFilter={setStatusFilter} evidenceDrafts={evidenceDrafts} setEvidenceDrafts={setEvidenceDrafts} disputeDrafts={disputeDrafts} setDisputeDrafts={setDisputeDrafts} onTransition={transitionLot} onConnectedTransition={handleAdminTransition} busyLotId={workflowBusyLotId} pickupAppointmentsByLot={pickupAppointmentsByLot} canManage={Boolean(authSession && profile?.role === "admin")} readOnly={Boolean(authSession)} />}
+                  : role === "Collector" ? <CollectorDashboard {...traceProps} traceabilityAvailable={!authSession || !connectedData?.ancillaryErrors?.includes("traceability")} lots={visibleLots.filter(lot => authSession ? lot.collectorId === authSession.user.id : lot.collector === DEMO_COLLECTOR)} allLotCount={collectorLots.length} query={query} setQuery={setQuery} onAdd={() => setShowForm(true)} onDecision={decideOffer} decisionBusyOfferId={decisionBusyOfferId} pickupAppointmentsByLot={pickupAppointmentsByLot} pickupCoordinationAvailable={!authSession || !connectedData?.ancillaryErrors?.includes("pickup_appointments")} pickupBusyLotId={pickupBusyLotId} onProposePickup={proposePickupTime} readOnly={Boolean(authSession)} />
+                  : role === "Recycler" ? currentSection === "my-offers" ? <RecyclerOffers {...traceProps} traceabilityAvailable={!authSession || !connectedData?.ancillaryErrors?.includes("traceability")} offers={myOffers} connected={Boolean(authSession)} pickupAppointmentsByLot={pickupAppointmentsByLot} pickupCoordinationAvailable={!authSession || !connectedData?.ancillaryErrors?.includes("pickup_appointments")} pickupBusyLotId={pickupBusyLotId} onRespondPickup={respondToPickupTime} /> : <RecyclerDashboard lots={visibleLots.filter(lot => ["Open", "Offer submitted"].includes(lot.status))} query={query} setQuery={setQuery} categoryFilter={categoryFilter} setCategoryFilter={setCategoryFilter} locationFilter={locationFilter} setLocationFilter={setLocationFilter} statusFilter={statusFilter} setStatusFilter={setStatusFilter} categories={categories} locations={locations} myOffers={myOffers} currentRecyclerId={authSession?.user?.id} readOnly={Boolean(authSession)} onOffer={lot => { setOfferLot(lot); setOfferPrice(""); setOfferMessage(""); setOfferError(""); }} />
+                    : <AdminDashboard {...traceProps} traceabilityAvailable={!authSession || !connectedData?.ancillaryErrors?.includes("traceability")} lots={visibleLots} query={query} setQuery={setQuery} statusFilter={statusFilter} setStatusFilter={setStatusFilter} evidenceDrafts={evidenceDrafts} setEvidenceDrafts={setEvidenceDrafts} disputeDrafts={disputeDrafts} setDisputeDrafts={setDisputeDrafts} onTransition={transitionLot} onConnectedTransition={handleAdminTransition} busyLotId={workflowBusyLotId} pickupAppointmentsByLot={pickupAppointmentsByLot} canManage={Boolean(authSession && profile?.role === "admin")} readOnly={Boolean(authSession)} />}
           <footer className="footer"><span>© 2026 Scarap_Yukti · Prototype workspace</span><span>{authSession ? "Supabase reads, Collector lot creation and offer decisions, Recycler offers, and Admin workflow RPC actions." : "Simulated workflow and recycling evidence; no verified recycler service."}</span></footer>
         </div>
       </main>
@@ -1215,7 +1217,7 @@ function LotFilters({ query, setQuery, statusFilter, setStatusFilter, categories
   </div>;
 }
 
-function CollectorDashboard({ onWeight, onDispute, lots, allLotCount, query, setQuery, onAdd, onDecision, decisionBusyOfferId, pickupAppointmentsByLot, pickupCoordinationAvailable, pickupBusyLotId, onProposePickup, readOnly = false }) {
+function CollectorDashboard({ onWeight, onDispute, traceabilityAvailable, lots, allLotCount, query, setQuery, onAdd, onDecision, decisionBusyOfferId, pickupAppointmentsByLot, pickupCoordinationAvailable, pickupBusyLotId, onProposePickup, readOnly = false }) {
   return <section className="panel dashboard-panel"><div className="panel-heading"><div><h2>My e-waste lots</h2><p>{readOnly ? "Supabase lot and offer records. Accept/reject decisions are checked by the database; other workflow updates are not connected." : "Compare recycler offers, then accept or reject each pending offer."}</p></div><span className={readOnly ? "connected-label" : "demo-label"}>{readOnly ? "CONNECTED COLLECTOR" : "DEMO COLLECTOR"}</span></div>
     <div className="filters role-filters"><div className="search-box"><Search size={17} /><input value={query} onChange={e => setQuery(e.target.value)} placeholder="Search my lots..." aria-label="Search my lots" /></div><span className="filters-note">Showing {lots.length} of {allLotCount} lots</span></div>
     {lots.length ? <div className="lot-card-list">{lots.map(lot => <article className="workflow-card" key={lot.id}>
@@ -1223,7 +1225,7 @@ function CollectorDashboard({ onWeight, onDispute, lots, allLotCount, query, set
       <div className="lot-meta-grid"><span><strong>{lot.weight} kg</strong><small>Estimated weight</small></span><span><MapPin size={14} /> {lot.location}<small>Approximate pickup area</small></span><span><strong>{shortDate(lot.date)}</strong><small>Created</small></span></div>
       {lot.notes && <p className="lot-notes">{lot.notes}</p>}
       <div className="workflow-progress"><span>Pickup and recycling status</span><strong>{statusLabel(lot.status)}</strong><ProgressTrack status={lot.status} /></div>
-      <LotTraceActions lot={lot} mode={readOnly ? "collector" : "info"} onWeight={onWeight} onDispute={onDispute} />
+      <LotTraceActions lot={lot} mode={readOnly ? "collector" : "info"} available={traceabilityAvailable} onWeight={onWeight} onDispute={onDispute} />
       {lot.status === "Pickup scheduled" && lot.offers.some(offer => offer.status === "accepted") && <PickupCoordination role="collector" lot={lot} appointment={pickupAppointmentsByLot.get(lot.id)} available={pickupCoordinationAvailable} busy={pickupBusyLotId === lot.id} connected={readOnly} onPropose={onProposePickup} />}
       {lot.status === "Recycling review" && lot.evidence && <div className="evidence-note"><ShieldCheck size={15} /><div><strong>{readOnly ? "Evidence/review note · not independently verified" : "Demo evidence submitted"}</strong><span>{lot.evidence}</span></div></div>}
       <div className="offers-heading"><strong>Offers received ({lot.offers.length})</strong><span>Compare amounts and terms before deciding</span></div>
@@ -1247,13 +1249,13 @@ function RecyclerDashboard({ lots, query, setQuery, categoryFilter, setCategoryF
   </section>;
 }
 
-function RecyclerOffers({ offers, connected = false, pickupAppointmentsByLot, pickupCoordinationAvailable, pickupBusyLotId, onRespondPickup, onWeight, onDispute }) {
+function RecyclerOffers({ offers, connected = false, traceabilityAvailable, pickupAppointmentsByLot, pickupCoordinationAvailable, pickupBusyLotId, onRespondPickup, onWeight, onDispute }) {
   return <section className="panel dashboard-panel"><div className="panel-heading"><div><h2>My submitted offers</h2><p>Follow collector decisions and the associated lot workflow.</p></div><span className={connected ? "connected-label" : "demo-label"}>{connected ? "CONNECTED RECYCLER" : "DEMO RECYCLER"}</span></div>
-    {offers.length ? <div className="lot-card-list">{offers.map(offer => <article className="workflow-card compact-card" key={offer.id}><div className="offer-card-top"><div><strong>{offer.lot.title}</strong><small>{offer.lot.id} · {offer.lot.category} · {offer.lot.location}</small></div><OfferStatusPill status={offer.status} /></div><div className="submitted-offer-details"><span className="offer-price">{money(offer.price)}</span><span>Lot status <StatusPill status={offer.lot.status} /></span></div><p className="lot-notes">{offer.message}</p>{connected && offer.status === "accepted" && <LotTraceActions lot={offer.lot} mode="recycler" onWeight={onWeight} onDispute={onDispute} />}{offer.status === "accepted" && offer.lot.status === "Pickup scheduled" && <PickupCoordination role="recycler" lot={offer.lot} appointment={pickupAppointmentsByLot.get(offer.lot.id)} available={pickupCoordinationAvailable} busy={pickupBusyLotId === offer.lot.id} connected={connected} onRespond={onRespondPickup} />}</article>)}</div> : <EmptyState title="No offers submitted" detail={connected ? "Submit an offer from an available lot to see it here." : "Browse available lots and submit a demo offer to see it here."} />}
+    {offers.length ? <div className="lot-card-list">{offers.map(offer => <article className="workflow-card compact-card" key={offer.id}><div className="offer-card-top"><div><strong>{offer.lot.title}</strong><small>{offer.lot.id} · {offer.lot.category} · {offer.lot.location}</small></div><OfferStatusPill status={offer.status} /></div><div className="submitted-offer-details"><span className="offer-price">{money(offer.price)}</span><span>Lot status <StatusPill status={offer.lot.status} /></span></div><p className="lot-notes">{offer.message}</p>{connected && offer.status === "accepted" && <LotTraceActions lot={offer.lot} mode="recycler" available={traceabilityAvailable} onWeight={onWeight} onDispute={onDispute} />}{offer.status === "accepted" && offer.lot.status === "Pickup scheduled" && <PickupCoordination role="recycler" lot={offer.lot} appointment={pickupAppointmentsByLot.get(offer.lot.id)} available={pickupCoordinationAvailable} busy={pickupBusyLotId === offer.lot.id} connected={connected} onRespond={onRespondPickup} />}</article>)}</div> : <EmptyState title="No offers submitted" detail={connected ? "Submit an offer from an available lot to see it here." : "Browse available lots and submit a demo offer to see it here."} />}
   </section>;
 }
 
-function AdminDashboard({ onWeight, onDispute, lots, query, setQuery, statusFilter, setStatusFilter, evidenceDrafts, setEvidenceDrafts, disputeDrafts, setDisputeDrafts, onTransition, onConnectedTransition, busyLotId, pickupAppointmentsByLot, canManage = false, readOnly = false }) {
+function AdminDashboard({ onWeight, onDispute, traceabilityAvailable, lots, query, setQuery, statusFilter, setStatusFilter, evidenceDrafts, setEvidenceDrafts, disputeDrafts, setDisputeDrafts, onTransition, onConnectedTransition, busyLotId, pickupAppointmentsByLot, canManage = false, readOnly = false }) {
   const runTransition = (lotId, nextStatus, demoStatus, note = "") => readOnly
     ? onConnectedTransition(lotId, nextStatus, demoStatus, note)
     : onTransition(lotId, demoStatus, note);
@@ -1267,7 +1269,7 @@ function AdminDashboard({ onWeight, onDispute, lots, query, setQuery, statusFilt
     {lots.length ? <div className="lot-card-list">{lots.map(lot => <article className="workflow-card" key={lot.id}>
       <LotHeading lot={lot} /><div className="admin-lot-topline"><span>Collector: {lot.collector || DEMO_COLLECTOR}</span><span>{lot.weight} kg · {lot.location}</span></div>
       <ProgressTrack status={lot.status} />
-      <LotTraceActions lot={lot} mode="info" onWeight={onWeight} onDispute={onDispute} />
+      <LotTraceActions lot={lot} mode="info" available={traceabilityAvailable} onWeight={onWeight} onDispute={onDispute} />
       {pickupAppointmentsByLot.get(lot.id) && <div className="pickup-summary"><strong>Pickup appointment · {pickupAppointmentsByLot.get(lot.id).status.replaceAll("_", " ")}</strong><span>{new Date(pickupAppointmentsByLot.get(lot.id).scheduledAt).toLocaleString()} · coordination record only</span></div>}
       <div className="admin-offers"><strong>Offers ({lot.offers.length})</strong>{lot.offers.length ? lot.offers.map(offer => <div className="admin-offer-row" key={offer.id}><span><strong>{offer.recycler}</strong><small>{offer.message}</small></span><b>{money(offer.price)}</b><OfferStatusPill status={offer.status} /></div>) : <p>No offers submitted.</p>}</div>
       {(!readOnly || canManage) && lot.status === "Pickup scheduled" && <div className="admin-action-row"><span>{readOnly ? "Coordinate pickup separately; mark collected only after handover has happened." : "No appointment is scheduled by this demo. Record collection only after the demo handover."}</span><button className="btn btn-light btn-small" disabled={disabled(lot.id)} onClick={() => runTransition(lot.id, "collected", "Collected")}>{busy(lot.id) ? "Saving…" : "Mark collected"}</button></div>}
@@ -1280,28 +1282,28 @@ function AdminDashboard({ onWeight, onDispute, lots, query, setQuery, statusFilt
   </section>;
 }
 
-const DISPUTE_FROM = ["Pickup scheduled", "Collected", "Recycling review"];
-
-function LotTraceActions({ lot, mode, onWeight, onDispute }) {
+function LotTraceActions({ lot, mode, available = true, onWeight, onDispute }) {
   const [weight, setWeight] = useState("");
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
   const run = async (handler, value) => {
     setBusy(true);
     try {
-      await handler?.(lot.id, value);
-      setWeight("");
-      setNote("");
+      const saved = await handler?.(lot.id, value);
+      if (saved !== false) {
+        setWeight("");
+        setNote("");
+      }
     } finally {
       setBusy(false);
     }
   };
-  const canWeigh = mode === "recycler" && lot.status === "Collected" && !lot.actualWeight;
-  const canDispute = (mode === "recycler" || mode === "collector") && DISPUTE_FROM.includes(lot.status);
+  const { canWeigh, canDispute, awaitingTraceability } = getTraceabilityActionState(lot, mode, available);
   const flagged = Number(lot.discrepancyPct) > 10;
-  if (!lot.actualWeight && !canWeigh && !canDispute) return null;
+  if (!lot.actualWeight && !canWeigh && !canDispute && !awaitingTraceability) return null;
   return <div className="trace-actions">
     {lot.actualWeight != null && <div className={`inline-hint ${flagged ? "warning" : ""}`}><ShieldCheck size={15} /> Handover weight: <strong>{lot.actualWeight} kg</strong> vs estimated {lot.weight} kg · difference {lot.discrepancyPct}%{flagged ? " · flagged for Admin review" : ""}. Recorded by the accepted Recycler; not independently verified.</div>}
+    {awaitingTraceability && <p className="pickup-waiting" role="status">Traceability actions are unavailable until their database fields and permissions can be read. Retry the marketplace refresh.</p>}
     {canWeigh && <div className="evidence-entry"><label>Actual handover weight (kg)<input type="number" min="0.1" max="100000" step="0.1" inputMode="decimal" value={weight} onChange={event => setWeight(event.target.value)} placeholder="e.g. 9.5" /></label><button type="button" className="btn btn-primary btn-small" disabled={busy || !weight} onClick={() => run(onWeight, weight)}>{busy ? "Saving…" : "Record weight"}</button></div>}
     {canDispute && <div className="evidence-entry"><label>Raise a dispute (10–500 characters)<textarea rows="2" minLength="10" maxLength="500" value={note} onChange={event => setNote(event.target.value)} placeholder="Describe the problem for Admin review" /></label><button type="button" className="btn btn-light btn-small" disabled={busy || note.trim().length < 10} onClick={() => run(onDispute, note)}>{busy ? "Saving…" : "Raise dispute"}</button></div>}
   </div>;

@@ -1,7 +1,7 @@
 import { supabase } from "./supabase.js";
 
-// Helpers for the 20261027000000_traceability_hardening migration.
-// Not wired into the UI yet; apply the migration before calling these.
+// Helpers for the optional 20261027000000_traceability_hardening migration.
+// These RPC calls require that migration and its permissions to be available.
 function requireClient() {
   if (!supabase) throw new Error("Supabase is not configured.");
   return supabase;
