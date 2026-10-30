@@ -1324,10 +1324,78 @@ function RecyclerDashboard({ lots, query, setQuery, categoryFilter, setCategoryF
   </section>;
 }
 
-function RecyclerOffers({ offers, connected = false, traceabilityAvailable, pickupAppointmentsByLot, pickupCoordinationAvailable, pickupBusyLotId, onRespondPickup, onWeight, onDispute }) {
-  return <section className="panel dashboard-panel"><div className="panel-heading"><div><h2>My submitted offers</h2><p>Follow collector decisions and the associated lot workflow.</p></div><span className={connected ? "connected-label" : "demo-label"}>{connected ? "CONNECTED RECYCLER" : "DEMO RECYCLER"}</span></div>
-    {offers.length ? <div className="lot-card-list">{offers.map(offer => <article className="workflow-card compact-card" key={offer.id}><div className="offer-card-top"><div><strong>{offer.lot.title}</strong><small>{offer.lot.id} · {offer.lot.category} · {offer.lot.location}</small></div><OfferStatusPill status={offer.status} /></div><div className="submitted-offer-details"><span className="offer-price">{money(offer.price)}</span><span>Lot status <StatusPill status={offer.lot.status} /></span></div><p className="lot-notes">{offer.message}</p>{connected && offer.status === "accepted" && <LotTraceActions lot={offer.lot} mode="recycler" available={traceabilityAvailable} onWeight={onWeight} onDispute={onDispute} />}{offer.status === "accepted" && offer.lot.status === "Pickup scheduled" && <PickupCoordination role="recycler" lot={offer.lot} appointment={pickupAppointmentsByLot.get(offer.lot.id)} available={pickupCoordinationAvailable} busy={pickupBusyLotId === offer.lot.id} connected={connected} onRespond={onRespondPickup} />}</article>)}</div> : <EmptyState title="No offers submitted" detail={connected ? "Submit an offer from an available lot to see it here." : "Browse available lots and submit a demo offer to see it here."} />}
+function RecyclerOffers({ offers, connected = false, traceabilityAvailable, pickupAppointmentsByLot, pickupCoordinationAvailable, pickupBusyLotId, onRespondPickup, onWeight, onDispute, currentRecyclerId, evidenceByLot = new Map(), onUploadEvidence, uploadBusyLotId, onOpenEvidence }) {
+  return <section className="panel dashboard-panel"><div className="panel-heading"><div><h2>My submitted offers</h2><p>Follow collector decisions, pickup coordination and recycling evidence.</p></div><span className={connected ? "connected-label" : "demo-label"}>{connected ? "CONNECTED RECYCLER" : "DEMO RECYCLER"}</span></div>
+    {offers.length ? <div className="lot-card-list">{offers.map(offer => {
+      const evidence = evidenceByLot.get(offer.lot.id) || [];
+      const canUpload = connected && offer.status === "accepted" && ["Collected", "Recycling review"].includes(offer.lot.status);
+      return <article className="workflow-card compact-card" key={offer.id}>
+        <div className="offer-card-top"><div><strong>{offer.lot.title}</strong><small>{offer.lot.id} · {offer.lot.category} · {offer.lot.location}</small></div><OfferStatusPill status={offer.status} /></div>
+        <div className="submitted-offer-details"><span className="offer-price">{money(offer.price)}</span><span>Lot status <StatusPill status={offer.lot.status} /></span></div>
+        <p className="lot-notes">{offer.message}</p>
+        {connected && offer.status === "accepted" && <LotTraceActions lot={offer.lot} mode="recycler" available={traceabilityAvailable} onWeight={onWeight} onDispute={onDispute} />}
+        {offer.status === "accepted" && offer.lot.status === "Pickup scheduled" && <PickupCoordination role="recycler" lot={offer.lot} appointment={pickupAppointmentsByLot.get(offer.lot.id)} available={pickupCoordinationAvailable} busy={pickupBusyLotId === offer.lot.id} connected={connected} onRespond={onRespondPickup} />}
+        {canUpload && <RecyclingEvidenceUpload lotId={offer.lot.id} busy={uploadBusyLotId === offer.lot.id} onUpload={onUploadEvidence} />}
+        {connected && evidence.length > 0 && <RecyclingEvidenceList items={evidence} onOpen={onOpenEvidence} />}
+      </article>;
+    })}</div> : <EmptyState title="No offers submitted" detail={connected ? "Submit an offer from an available lot to see it here." : "Browse available lots and submit a demo offer to see it here."} />}
   </section>;
+}
+
+function RecyclingEvidenceUpload({ lotId, busy = false, onUpload }) {
+  const [file, setFile] = useState(null);
+  const [description, setDescription] = useState("");
+  const [error, setError] = useState("");
+  const submit = async event => {
+    event.preventDefault();
+    if (!file) {
+      setError("Choose a photo or PDF before uploading.");
+      return;
+    }
+    setError("");
+    const saved = await onUpload(lotId, file, description);
+    if (saved) {
+      setFile(null);
+      setDescription("");
+      event.currentTarget?.reset?.();
+    }
+  };
+  return <form className="evidence-entry" onSubmit={submit}>
+    <strong>Recycling evidence</strong>
+    <p className="lot-notes">Upload a clear photo of the recycling process or a supporting PDF. Files are private and limited to 10 MB.</p>
+    <label>Photo or PDF<input type="file" accept="image/jpeg,image/png,image/webp,application/pdf" disabled={busy} onChange={event => { setFile(event.target.files?.[0] || null); setError(""); }} /></label>
+    <label>Description (optional)<textarea rows="2" maxLength="500" value={description} disabled={busy} onChange={event => setDescription(event.target.value)} placeholder="Briefly describe the recycling evidence" /></label>
+    {error && <span className="pickup-error" role="alert">{error}</span>}
+    <button type="submit" className="btn btn-primary btn-small" disabled={busy || !file}>{busy ? "Uploading…" : "Upload evidence"}</button>
+  </form>;
+}
+
+function RecyclingEvidenceList({ items = [], canReview = false, reviewDrafts = {}, setReviewDrafts, busyEvidenceId, onReview, onOpen }) {
+  if (!items.length) {
+    return <div className="inline-hint"><ShieldCheck size={15} /> {canReview ? "No evidence has been submitted for this lot yet." : "No recycling evidence has been submitted yet."}</div>;
+  }
+  return <div className="evidence-entry">
+    <strong>Submitted recycling evidence</strong>
+    {items.map(item => <div className="evidence-note" key={item.id}>
+      <ShieldCheck size={15} />
+      <div>
+        <strong>{item.fileName} · {item.reviewStatus}</strong>
+        <span>{item.description || "No description provided."}</span>
+        {item.reviewNote && <span>Admin note: {item.reviewNote}</span>}
+        <span>{(item.fileSizeBytes / (1024 * 1024)).toFixed(2)} MB · {new Date(item.createdAt).toLocaleString("en-IN")}</span>
+      </div>
+      <div className="offer-actions">
+        <button type="button" className="btn btn-light btn-small" onClick={() => onOpen(item.storagePath)}>View file</button>
+      </div>
+      {canReview && item.reviewStatus === "pending" && <div className="evidence-entry">
+        <label>Admin review note (required for rejection)<textarea rows="2" maxLength="500" value={reviewDrafts[item.id] || ""} onChange={event => setReviewDrafts(prev => ({ ...prev, [item.id]: event.target.value }))} placeholder="Explain the decision or any issue with this evidence" /></label>
+        <div className="offer-actions">
+          <button type="button" className="btn btn-light btn-small" disabled={Boolean(busyEvidenceId)} onClick={() => onReview(item.id, "rejected")}>{busyEvidenceId === item.id ? "Saving…" : "Reject evidence"}</button>
+          <button type="button" className="btn btn-primary btn-small" disabled={Boolean(busyEvidenceId)} onClick={() => onReview(item.id, "approved")}>{busyEvidenceId === item.id ? "Saving…" : "Approve & mark recycled"}</button>
+        </div>
+      </div>}
+    </div>)}
+  </div>;
 }
 
 function AdminDashboard({ onWeight, onDispute, traceabilityAvailable, lots, query, setQuery, statusFilter, setStatusFilter, evidenceDrafts, setEvidenceDrafts, disputeDrafts, setDisputeDrafts, onTransition, onConnectedTransition, busyLotId, pickupAppointmentsByLot, canManage = false, readOnly = false }) {
