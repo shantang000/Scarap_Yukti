@@ -59,7 +59,7 @@ create policy recycling_evidence_insert_accepted_recycler
     and exists (
       select 1 from public.lots l
       join public.offers o on o.lot_id = l.id
-      where l.id = lot_id
+      where l.id = recycling_evidence.lot_id
         and l.status in ('collected', 'recycling_review')
         and o.recycler_id = (select auth.uid())
         and o.status = 'accepted'
