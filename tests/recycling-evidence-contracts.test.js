@@ -7,6 +7,7 @@ import test from "node:test";
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const migration = readFileSync(resolve(root, "supabase/migrations/20261030000000_recycling_evidence_verification.sql"), "utf8");
 const helper = readFileSync(resolve(root, "src/lib/recyclingEvidence.js"), "utf8");
+const app = readFileSync(resolve(root, "src/App.jsx"), "utf8");
 
 function functionDefinition(name) {
   const escaped = name.replaceAll(".", "\\.");
@@ -50,4 +51,12 @@ test("no workflow path can mark a lot recycled without Admin-approved evidence",
   assert.match(migration, /before update of status on public\.lots/i);
   assert.match(migration, /revoke all on function public\.review_recycling_evidence\(uuid, text, text\) from public, anon, authenticated/i);
   assert.match(migration, /grant execute on function public\.review_recycling_evidence\(uuid, text, text\) to authenticated/i);
+});
+test("connected dashboards use private uploads and Admin approval instead of a note-only recycled bypass", () => {
+  assert.match(app, /uploadRecyclingEvidence\(\{ lotId, userId: authSession\.user\.id, file, description \}\)/);
+  assert.match(app, /reviewRecyclingEvidence\(evidenceId, decision, note\)/);
+  assert.match(app, /Approve &amp; mark recycled|Approve & mark recycled/);
+  assert.match(app, /Open recycling review/);
+  assert.match(app, /A lot can only be marked recycled by approving its submitted evidence/);
+  assert.match(app, /createRecyclingEvidenceUrl\(storagePath\)/);
 });
