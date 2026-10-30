@@ -15,6 +15,7 @@ test("ancillary history results retain rows when both queries succeed", () => {
     workflowRows: workflow,
     pickupAppointmentRows: [],
     traceabilityRows: [],
+    recyclingEvidenceRows: [],
     ancillaryErrors: []
   });
 });
@@ -31,6 +32,7 @@ test("one history query failure is reported without discarding the other history
     workflowRows: workflow,
     pickupAppointmentRows: [],
     traceabilityRows: [],
+    recyclingEvidenceRows: [],
     ancillaryErrors: ["activity"]
   });
 });
@@ -46,6 +48,7 @@ test("query errors and malformed ancillary responses are not treated as successf
     workflowRows: [],
     pickupAppointmentRows: [],
     traceabilityRows: [],
+    recyclingEvidenceRows: [],
     ancillaryErrors: ["activity", "workflow"]
   });
 });
@@ -56,6 +59,7 @@ test("empty successful history results remain distinguishable from failures", ()
     workflowRows: [],
     pickupAppointmentRows: [],
     traceabilityRows: [],
+    recyclingEvidenceRows: [],
     ancillaryErrors: []
   });
 });
@@ -68,6 +72,7 @@ test("pickup appointment read failures are reported separately from successful h
     workflowRows: [],
     pickupAppointmentRows: [],
     traceabilityRows: [],
+    recyclingEvidenceRows: [],
     ancillaryErrors: ["pickup_appointments"]
   });
 });
@@ -79,6 +84,35 @@ test("traceability-column failures remain ancillary to the core lot read", () =>
     workflowRows: [],
     pickupAppointmentRows: [],
     traceabilityRows: [],
+    recyclingEvidenceRows: [],
     ancillaryErrors: ["traceability"]
   });
+});
+
+test("recycling evidence rows are retained as an ancillary result", () => {
+  const evidence = [{ id: "evidence-1", lot_id: "lot-1", review_status: "pending" }];
+  const result = collectAncillaryReadResults(
+    fulfilled([]),
+    fulfilled([]),
+    fulfilled([]),
+    fulfilled([]),
+    fulfilled(evidence)
+  );
+  assert.deepEqual(result.recyclingEvidenceRows, evidence);
+  assert.deepEqual(result.ancillaryErrors, []);
+});
+
+test("recycling evidence read failures are reported without discarding core history rows", () => {
+  const activity = [{ id: 1 }];
+  const evidenceFailure = { status: "rejected", reason: new Error("permission denied") };
+  const result = collectAncillaryReadResults(
+    fulfilled(activity),
+    fulfilled([]),
+    fulfilled([]),
+    fulfilled([]),
+    evidenceFailure
+  );
+  assert.deepEqual(result.activityRows, activity);
+  assert.deepEqual(result.recyclingEvidenceRows, []);
+  assert.deepEqual(result.ancillaryErrors, ["recycling_evidence"]);
 });
