@@ -1,10 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
-  Activity, Bell, Check, ChevronDown, CircleHelp, ClipboardList, Download, Menu,
-  Filter, Leaf, MapPin, Package, Plus, Recycle, RefreshCw, Search, ShieldCheck, Sparkles,
+  Activity, ArrowLeftRight, Bell, Check, ChevronDown, CircleHelp, ClipboardList, Download, Eye, EyeOff, Menu,
+  Filter, Leaf, MapPin, Package, Plus, Recycle, RefreshCw, Search, ShieldCheck, Sparkles, Trash2,
   Truck, Users, Wallet, X, Zap
 } from "lucide-react";
-import { hasSupabaseConfig, supabase } from "./lib/supabase.js";
+import {
+  activateSupabaseAccount, forgetSupabaseAccount, getActiveAccountId,
+  getActiveSupabaseClient, getRememberedSupabaseAccounts, hasSupabaseConfig,
+  prepareSupabaseAccount, rememberSupabaseAccount, supabase
+} from "./lib/supabase.js";
 import { loadMarketplaceSnapshot } from "./lib/marketplaceReads.js";
 import { subscribeToMarketplaceChanges } from "./lib/marketplaceRealtime.js";
 import { raiseDispute, recordHandoverWeight } from "./lib/lotActions.js";
@@ -104,6 +108,9 @@ export default function App() {
   const [data, setData] = useState(readSaved);
   const [demoRole, setDemoRole] = useState("Collector");
   const [authSession, setAuthSession] = useState(null);
+  const [authClient, setAuthClient] = useState(getActiveSupabaseClient);
+  const [rememberedAccounts, setRememberedAccounts] = useState(getRememberedSupabaseAccounts);
+  const [showPassword, setShowPassword] = useState(false);
   const [demoAccess, setDemoAccess] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const authUserId = useRef(null);
@@ -151,12 +158,12 @@ export default function App() {
   const [form, setForm] = useState({ title: "", category: "Computers", weight: "", location: "", notes: "" });
 
   useEffect(() => {
-    if (!supabase) {
+    if (!authClient) {
       setAuthInitializing(false);
       return undefined;
     }
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+    const { data: { subscription } } = authClient.auth.onAuthStateChange((event, session) => {
       if (event === "PASSWORD_RECOVERY") {
         setPasswordRecovery(true);
         setRecoveryPassword("");
@@ -164,6 +171,14 @@ export default function App() {
         setAuthFeedback("");
       }
       setAuthSession(session);
+      if (session?.user?.email) {
+        setRememberedAccounts(rememberSupabaseAccount({
+          id: getActiveAccountId(),
+          email: session.user.email,
+          displayName: session.user.user_metadata?.display_name || "",
+          role: ""
+        }));
+      }
       const nextUserId = session?.user?.id ?? null;
       if (authUserId.current !== nextUserId) {
         authUserId.current = nextUserId;
@@ -182,10 +197,10 @@ export default function App() {
     });
 
     return () => subscription.unsubscribe();
-  }, []);
+  }, [authClient]);
 
   useEffect(() => {
-    if (!supabase || !authSession?.user?.id) {
+    if (!authClient || !authSession?.user?.id) {
       setProfile(null);
       setProfileState("idle");
       return undefined;
@@ -195,7 +210,7 @@ export default function App() {
     setProfileState("loading");
 
     async function loadProfile() {
-      const { data: row, error } = await supabase
+      const { data: row, error } = await authClient
         .from("profiles")
         .select("id, display_name, role")
         .eq("id", authSession.user.id)
@@ -218,6 +233,12 @@ export default function App() {
       }
 
       setProfile(row);
+      setRememberedAccounts(rememberSupabaseAccount({
+        id: getActiveAccountId(),
+        email: authSession.user.email,
+        displayName: row.display_name || "",
+        role: row.role
+      }));
       setProfileState("ready");
       setAuthMessage("");
     }
@@ -231,10 +252,10 @@ export default function App() {
     });
 
     return () => { active = false; };
-  }, [authSession?.user?.id]);
+  }, [authClient, authSession?.user?.id]);
 
   useEffect(() => {
-    if (!authSession?.user?.id || profileState !== "ready") return undefined;
+    if (!authClient || !authSession?.user?.id || profileState !== "ready") return undefined;
 
     let active = true;
     setMarketplaceRefreshing(true);
@@ -262,7 +283,7 @@ export default function App() {
       });
 
     return () => { active = false; };
-  }, [authSession?.user?.id, profileState, reloadToken]);
+  }, [authClient, authSession?.user?.id, profileState, reloadToken]);
 
   useEffect(() => {
     const userId = authSession?.user?.id;
@@ -320,7 +341,7 @@ export default function App() {
 
   async function submitAuth(e) {
     e.preventDefault();
-    if (!supabase) {
+    if (!hasSupabaseConfig) {
       setAuthFeedback("Add the Supabase URL and publishable key to .env.local, then restart Vite.", "error");
       return;
     }
@@ -336,23 +357,35 @@ export default function App() {
     setAuthBusy(true);
     setAuthFeedback("");
     try {
+      const { accountId, client } = prepareSupabaseAccount(email);
+      setAuthClient(client);
       if (authMode === "signup") {
-        const { data: result, error } = await supabase.auth.signUp({
+        const { data: result, error } = await client.auth.signUp({
           email,
           password,
           options: { data: { display_name: displayName } }
         });
         if (error) throw error;
         if (!result.session) {
+          setRememberedAccounts(rememberSupabaseAccount({ id: accountId, email, displayName, role: "collector" }));
           setAuthFeedback("Account request received. Check your email to confirm the account, then sign in.");
           setAuthMode("signin");
         } else {
+          setAuthSession(result.session);
+          setRememberedAccounts(rememberSupabaseAccount({ id: accountId, email, displayName, role: "collector" }));
           setAuthFeedback("Account created. The database assigns new users the Collector role.");
         }
       } else {
-        const { error } = await supabase.auth.signInWithPassword({ email, password });
+        const { data: result, error } = await client.auth.signInWithPassword({ email, password });
         if (error) throw error;
-        setAuthFeedback("Signed in. Loading your database profile…");
+        setAuthSession(result.session);
+        setRememberedAccounts(rememberSupabaseAccount({
+          id: accountId,
+          email,
+          displayName: result.user?.user_metadata?.display_name || "",
+          role: ""
+        }));
+        setAuthFeedback("Signed in. This account is now remembered on this device.");
       }
     } catch (error) {
       setAuthFeedback(error.message || "Authentication failed. Please try again.", "error");
@@ -419,12 +452,12 @@ export default function App() {
   }
 
   async function signOut() {
-    if (!supabase) return;
+    if (!authClient) return;
     setAuthBusy(true);
     try {
-      const { error } = await supabase.auth.signOut();
+      const { error } = await authClient.auth.signOut({ scope: "local" });
       if (error) throw error;
-      setAuthFeedback("Signed out. You can sign in again or open the local demo.");
+      setAuthFeedback("Signed out from this account on this device. Your other remembered accounts remain available.");
     } catch (error) {
       setAuthFeedback(error.message || "Could not sign out. Please try again.", "error");
     } finally {
