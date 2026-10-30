@@ -55,7 +55,11 @@ export async function loadMarketplaceSnapshot() {
         .order("created_at", { ascending: false }),
       supabase
         .from("lots")
-        .select("id, actual_weight_kg, weight_discrepancy_pct")
+        .select("id, actual_weight_kg, weight_discrepancy_pct"),
+      supabase
+        .from("recycling_evidence")
+        .select("id, lot_id, submitted_by, storage_path, file_name, content_type, file_size_bytes, description, review_status, review_note, reviewed_by, reviewed_at, created_at")
+        .order("created_at", { ascending: false })
     ])
   ]);
 
@@ -65,7 +69,7 @@ export async function loadMarketplaceSnapshot() {
     throw new Error("Could not load marketplace data: the database returned an invalid lots or offers response.");
   }
 
-  const { activityRows, workflowRows, pickupAppointmentRows, traceabilityRows, ancillaryErrors } = collectAncillaryReadResults(...ancillaryResults);
+  const { activityRows, workflowRows, pickupAppointmentRows, traceabilityRows, recyclingEvidenceRows, ancillaryErrors } = collectAncillaryReadResults(...ancillaryResults);
 
   const lotRows = lotsResult.data || [];
   const offerRows = offersResult.data || [];
@@ -157,5 +161,21 @@ export async function loadMarketplaceSnapshot() {
     updatedAt: item.updated_at
   }));
 
-  return { lots, activity, workflowEvents, pickupAppointments, ancillaryErrors };
+  const recyclingEvidence = recyclingEvidenceRows.map(item => ({
+    id: item.id,
+    lotId: item.lot_id,
+    submittedBy: item.submitted_by,
+    storagePath: item.storage_path,
+    fileName: item.file_name,
+    contentType: item.content_type,
+    fileSizeBytes: Number(item.file_size_bytes),
+    description: item.description || "",
+    reviewStatus: item.review_status,
+    reviewNote: item.review_note || "",
+    reviewedBy: item.reviewed_by,
+    reviewedAt: item.reviewed_at,
+    createdAt: item.created_at
+  }));
+
+  return { lots, activity, workflowEvents, pickupAppointments, recyclingEvidence, ancillaryErrors };
 }
