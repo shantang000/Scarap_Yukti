@@ -98,6 +98,14 @@ The app calls `respond_to_offer` for Collector decisions and `advance_lot_workfl
 
 When signed out, select Collector, Recycler, or Admin to preview the dashboards and simulated workflow. Demo records are stored in this browser's `localStorage`. They are not authenticated, shared with other users, or protected by database RLS.
 
+## Recycling evidence verification (new follow-up migration)
+
+The optional `20261030000000_recycling_evidence_verification.sql` migration adds a private Supabase Storage bucket and a participant-scoped evidence table. The accepted Recycler can upload JPG, PNG, WebP, or PDF evidence (maximum 10 MB per file) after collection. The lot Collector and Admin can read the evidence through short-lived signed URLs; the accepted Recycler can also read their own lot's evidence.
+
+Only an Admin can approve or reject a pending evidence record through `review_recycling_evidence`. Approval moves a lot from `recycling_review` to `recycled`; rejection leaves it in review and records the Admin's note. A database trigger blocks any other workflow path from marking a lot recycled without an approved evidence record. Evidence and approval are platform records, not independent proof of physical recycling or a government-issued certificate.
+
+This migration is **not applied automatically** and has not been applied to the hosted Supabase project by this repository change. Before applying it, inspect the target project's migration history and test the SQL against a disposable Supabase project. Do not rerun it if its objects already exist. The browser helper is in `src/lib/recyclingEvidence.js`; the dashboard upload/review interface is a separate integration step.
+
 ## Build and preview
 
 ```bash
