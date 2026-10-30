@@ -111,6 +111,7 @@ export default function App() {
   const [authClient, setAuthClient] = useState(getActiveSupabaseClient);
   const [rememberedAccounts, setRememberedAccounts] = useState(getRememberedSupabaseAccounts);
   const [showPassword, setShowPassword] = useState(false);
+  const [switchingAccountId, setSwitchingAccountId] = useState(null);
   const [demoAccess, setDemoAccess] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const authUserId = useRef(null);
@@ -462,6 +463,40 @@ export default function App() {
       setAuthFeedback(error.message || "Could not sign out. Please try again.", "error");
     } finally {
       setAuthBusy(false);
+    }
+  }
+
+  async function switchRememberedAccount(account) {
+    if (!account?.id || !account.email || switchingAccountId) return;
+    if (account.id === getActiveAccountId()) {
+      notify("This is already the active account.");
+      return;
+    }
+    setSwitchingAccountId(account.id);
+    setAuthInitializing(true);
+    setAuthMessage("");
+    setProfile(null);
+    setConnectedData(null);
+    setAuthSession(null);
+    authUserId.current = null;
+    try {
+      const client = activateSupabaseAccount(account.id);
+      if (!client) throw new Error("Supabase is not configured on this device.");
+      setAuthClient(client);
+      setAuthForm(prev => ({ ...prev, email: account.email, password: "" }));
+      const { data: result, error } = await client.auth.getSession();
+      if (error) throw error;
+      setAuthSession(result.session);
+      if (!result.session) {
+        setAuthFeedback("No active saved session for this account. Enter its password to sign in.", "error");
+      } else {
+        setAuthFeedback(`Switched to ${account.role ? account.role[0].toUpperCase() + account.role.slice(1) : "remembered"} account.`);
+      }
+    } catch (error) {
+      setAuthFeedback(error.message || "Could not switch accounts. Please try again.", "error");
+      setAuthInitializing(false);
+    } finally {
+      setSwitchingAccountId(null);
     }
   }
 
@@ -1055,6 +1090,8 @@ export default function App() {
           <div className="auth-login-heading"><span className="eyebrow">YOUR WORKSPACE</span><h2>Sign in to continue</h2><p>Use your account to open the marketplace dashboard.</p></div>
           <AuthPanel
             configured={hasSupabaseConfig}
+            showPassword={showPassword}
+            setShowPassword={setShowPassword}
             session={null}
             profile={null}
             mode={authMode}
@@ -1103,7 +1140,7 @@ export default function App() {
             <button className="icon-btn" title="Help" onClick={() => notify(authSession ? "Supabase reads, Collector lot creation and offer decisions, Recycler offers, and Admin workflow RPC actions are connected. Pickup time coordination requires the reviewed follow-up migration. Payments, automated pickup, and Recycler verification are not connected." : "This is a local frontend demo. The role selector does not sign you in or enforce secure permissions.")}><CircleHelp size={19} /></button>
             <button className="icon-btn" title="Notifications" onClick={() => notify(authSession ? "Supabase notifications are not connected yet." : "You are all caught up in this demo.")}><Bell size={19} /></button>
             {authSession && profile
-              ? <details className="profile-menu"><summary className="profile-menu-trigger"><span className="profile-avatar">{(profile.display_name || authSession.user.email || "U").slice(0, 1).toUpperCase()}</span><span className="profile-menu-copy"><strong>{profile.display_name || authSession.user.email}</strong><small>{role} account</small></span><ChevronDown size={15} /></summary><div className="profile-menu-panel"><strong>{profile.display_name || "Marketplace user"}</strong><span>{authSession.user.email}</span><span className="auth-role-pill">DATABASE ROLE - {role}</span><button type="button" className="btn btn-light btn-small" onClick={signOut} disabled={authBusy}>{authBusy ? "Signing out..." : "Sign out"}</button></div></details>
+              ? <details className="profile-menu"><summary className="profile-menu-trigger"><span className="profile-avatar">{(profile.display_name || authSession.user.email || "U").slice(0, 1).toUpperCase()}</span><span className="profile-menu-copy"><strong>{profile.display_name || authSession.user.email}</strong><small>{role} account</small></span><ChevronDown size={15} /></summary><div className="profile-menu-panel"><strong>{profile.display_name || "Marketplace user"}</strong><span>{authSession.user.email}</span><span className="auth-role-pill">DATABASE ROLE - {role}</span>{rememberedAccounts.length > 1 && <div className="quick-switch-list"><span className="quick-switch-heading">SWITCH ACCOUNT</span>{rememberedAccounts.filter(account => account.id !== getActiveAccountId()).slice(0, 3).map(account => <button type="button" className="quick-switch-account" key={account.id} onClick={() => switchRememberedAccount(account)} disabled={Boolean(switchingAccountId)}><span className="quick-switch-avatar">{(account.displayName || account.email || "U").slice(0, 1).toUpperCase()}</span><span className="quick-switch-copy"><strong>{account.displayName || account.email}</strong><small>{account.role ? account.role.toUpperCase() : account.email}</small></span><span className="quick-switch-action">{switchingAccountId === account.id ? "Opening…" : "Switch"}</span></button>)}</div>}<button type="button" className="btn btn-light btn-small" onClick={signOut} disabled={authBusy}>{authBusy ? "Signing out..." : "Sign out"}</button></div></details>
               : <div className="role-picker"><Users size={17} /><select value={demoRole} onChange={e => { setDemoRole(e.target.value); setSection("overview"); setQuery(""); setStatusFilter("All statuses"); setCategoryFilter("All categories"); setLocationFilter("All locations"); }} aria-label="Choose demo dashboard"><option>Collector</option><option>Recycler</option><option>Admin</option></select><ChevronDown size={14} /></div>}
             {!authSession && <button type="button" className="btn btn-light btn-small demo-sign-in" onClick={() => setDemoAccess(false)}>Sign in</button>}
           </div>
@@ -1214,7 +1251,7 @@ function SettingsWorkspace({ session, profile, role, onSignOut, onReturnToSignIn
   </section>;
 }
 
-function AuthPanel({ configured, session, profile, mode, setMode, form, setForm, onSubmit, onForgotPassword, onSignOut, busy, message, messageType }) {
+function AuthPanel({ configured, session, profile, mode, setMode, form, setForm, onSubmit, onForgotPassword, onSignOut, busy, message, messageType, showPassword, setShowPassword }) {
   return <section className={`auth-panel ${session ? "connected" : ""}`} aria-label="Supabase authentication">
     <div className="auth-panel-intro">
       <span className="eyebrow"><ShieldCheck size={14} /> AUTHENTICATION · PHASE 1</span>
@@ -1231,7 +1268,7 @@ function AuthPanel({ configured, session, profile, mode, setMode, form, setForm,
     </div> : <form className="auth-form" onSubmit={onSubmit}>
       {mode === "signup" && <label>Name (optional)<input type="text" maxLength="100" autoComplete="name" value={form.displayName} onChange={e => setForm(prev => ({ ...prev, displayName: e.target.value }))} /></label>}
       <label>Email<input type="email" autoComplete="email" required value={form.email} onChange={e => setForm(prev => ({ ...prev, email: e.target.value }))} /></label>
-      <label>Password<input type="password" autoComplete={mode === "signup" ? "new-password" : "current-password"} required value={form.password} onChange={e => setForm(prev => ({ ...prev, password: e.target.value }))} /></label>
+      <label>Password<div className="auth-password-field"><input type={showPassword ? "text" : "password"} autoComplete={mode === "signup" ? "new-password" : "current-password"} required value={form.password} onChange={e => setForm(prev => ({ ...prev, password: e.target.value }))} /><button type="button" className="auth-password-toggle" onClick={() => setShowPassword(value => !value)} aria-label={showPassword ? "Hide password" : "Show password"} aria-pressed={showPassword}>{showPassword ? <EyeOff size={16} /> : <Eye size={16} />}</button></div></label>
       <div className="auth-form-actions"><button className="btn btn-primary btn-small" type="submit" disabled={busy}>{busy ? "Please wait…" : mode === "signup" ? "Create account" : "Sign in"}</button><button className="auth-mode-toggle" type="button" onClick={() => setMode(mode === "signup" ? "signin" : "signup")} disabled={busy}>{mode === "signup" ? "Already registered? Sign in" : "New here? Create an account"}</button>{mode === "signin" && <button className="auth-mode-toggle" type="button" onClick={onForgotPassword} disabled={busy}>Forgot password?</button>}</div>
       {message && <p className={`auth-message ${messageType}`} role={messageType === "error" ? "alert" : "status"}>{message}</p>}
       <p className="auth-demo-note">After sign-in, marketplace data loads from Supabase. New accounts receive the Collector role from the database; users cannot choose or promote their own role here.</p>
