@@ -1392,7 +1392,7 @@ function RecyclingEvidenceList({ items = [], canReview = false, reviewDrafts = {
       {canReview && item.reviewStatus === "pending" && <div className="evidence-entry">
         <label>Admin review note (required for rejection)<textarea rows="2" maxLength="500" value={reviewDrafts[item.id] || ""} onChange={event => setReviewDrafts(prev => ({ ...prev, [item.id]: event.target.value }))} placeholder="Explain the decision or any issue with this evidence" /></label>
         <div className="offer-actions">
-          <button type="button" className="btn btn-light btn-small" disabled={Boolean(busyEvidenceId)} onClick={() => onReview(item.id, "rejected")}>{busyEvidenceId === item.id ? "Saving…" : "Reject evidence"}</button>
+          <button type="button" className="btn btn-light btn-small" disabled={Boolean(busyEvidenceId) || (reviewDrafts[item.id] || "").trim().length < 10} onClick={() => onReview(item.id, "rejected")}>{busyEvidenceId === item.id ? "Saving…" : "Reject evidence"}</button>
           <button type="button" className="btn btn-primary btn-small" disabled={Boolean(busyEvidenceId)} onClick={() => onReview(item.id, "approved")}>{busyEvidenceId === item.id ? "Saving…" : "Approve & mark recycled"}</button>
         </div>
       </div>}
