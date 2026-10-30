@@ -11,14 +11,14 @@ Scarap_Yukti is built with React, Vite, and Supabase. It provides separate Colle
 
 - **Collector:** create e-waste lots, view incoming Recycler offers, and accept or reject pending offers for owned lots.
 - **Recycler:** browse available lots and submit an offer. The database permits one offer per Recycler per lot.
-- **Admin:** monitor marketplace records and advance allowed workflow steps through a database RPC.
+- **Admin:** monitor marketplace records, record collection, open recycling review, and approve or reject submitted recycling evidence through a database RPC.
 - **Traceability (optional follow-up migration):** the accepted Recycler can record handover weight; a discrepancy above 10% is flagged for Admin review. The lot-owning Collector or accepted Recycler can raise a dispute. These records do not independently verify a physical handover or recycling outcome.
 - **Pickup coordination (follow-up migration required):** the lot-owning Collector can propose a time after accepting an offer; the accepted Recycler can confirm it or request another time. This records an agreement, not a guaranteed pickup or completed handover.
 - **Workflow history:** track offer decisions, pickup scheduling, collection, recycling review, and recycled status.
 - **Authentication:** sign up, sign in, sign out, and recover a password with Supabase Auth. The dashboard role is read from the user's database profile.
 - **Profile privacy:** direct profile reads are limited to the user's own profile; a restricted database function returns participant names only for relevant visible marketplace records.
 
-The project owner reports testing this connected workflow: Collector creates a lot → Recycler submits an offer → Collector accepts it → Admin advances it through `pickup_scheduled`, `collected`, `recycling_review`, and `recycled`. The final status remained after refreshing. A successful build alone does not verify live Supabase behavior.
+The connected workflow is designed as: Collector creates a lot → Recycler submits an offer → Collector accepts it → pickup is coordinated → Admin records collection → accepted Recycler uploads private recycling evidence → Admin approves or rejects the evidence. Only approval moves the lot to `recycled`. A successful build alone does not verify live Supabase behavior.
 
 ## Local setup
 
@@ -65,10 +65,11 @@ The migrations in `supabase/migrations/` are intended to be applied in this orde
 2. `20261025000000_profile_privacy_lookup.sql` — own-profile read policy and the limited marketplace participant-name lookup function.
 3. `20261027000000_traceability_hardening.sql` — optional follow-up adding handover-weight recording and participant dispute RPCs.
 4. `20261028000000_pickup_appointment_coordination.sql` — optional follow-up for proposed/confirmed pickup times and appointment reads by the lot participants and Admins.
+5. `20261030000000_recycling_evidence_verification.sql` — private evidence uploads, participant-scoped reads, Admin review RPC, and a database trigger that blocks recycling completion without approval.
 
 These are schema migrations, not scripts to rerun casually. Before applying them to an existing Supabase project, check its migration history and actual schema. The project owner reports that both have already been applied to the current project; do not reapply them there. For a fresh project, review the SQL and test it on a disposable database before applying it to a main project. This repository and its build do not run SQL against Supabase.
 
-The traceability and pickup coordination migrations are optional follow-ups and are not applied by this repository or its build. Review and test each on a disposable database first. Apply them manually only after checking the target database's actual schema and migration history; do not rerun migrations already applied. Until the traceability migration is applied, handover-weight fields and its RPC actions are unavailable; the app keeps core lot/offer reads usable. Until the pickup coordination migration is applied and its table is readable under RLS, pickup time coordination is unavailable.
+The traceability, pickup coordination, and recycling evidence migrations are follow-ups and are not applied automatically by this repository or its build. Review each target database's actual schema and migration history before applying; do not rerun migrations already applied. The recycling evidence migration has been manually applied and verified in the `Scarap-Yukti_Test` project. It has not been applied to a production Supabase project. Until the relevant optional migrations are applied, their associated UI actions remain unavailable.
 
 ### Live marketplace updates
 
@@ -87,16 +88,27 @@ Use separate signed-in accounts with the required database roles. Verify the acc
 1. Sign in as a Collector and create a lot.
 2. Sign in as a Recycler and submit an offer to that lot.
 3. Sign back in as the lot-owning Collector and accept or reject the pending offer.
-4. Sign in as an Admin and advance the accepted lot through collection and recycling review to `recycled`.
-5. Refresh the page and confirm the status persisted. Check the corresponding records in Supabase.
+4. Sign in as an Admin and record collection after the actual handover.
+5. Move the lot into recycling review.
+6. Sign in as the accepted Recycler and upload a JPG, PNG, WebP, or PDF file (up to 10 MB).
+7. Sign in as an Admin, inspect the private file, and approve or reject it. Approval marks the lot `recycled`; rejection leaves it in review.
+8. Refresh the page and confirm the status and evidence records persisted. Check the corresponding records in Supabase.
 
 If the pickup coordination migration has been reviewed and applied, continue: the Collector proposes a date/time for the accepted offer; the accepted Recycler confirms it or requests another time; the Collector proposes a revised time if requested. A confirmed appointment records both accounts' response. Admin should mark the lot collected only after the actual handover. Appointment notes and agreement do not verify a real-world pickup.
 
-The app calls `respond_to_offer` for Collector decisions and `advance_lot_workflow` for Admin workflow actions. The database functions and RLS policies are intended to enforce permissions and valid transitions; frontend visibility checks are not a security boundary.
+The app calls `respond_to_offer` for Collector decisions, `advance_lot_workflow` for Admin collection/review transitions, and `review_recycling_evidence` for evidence decisions. The database functions, Storage policies, trigger, and RLS policies enforce permissions and valid transitions; frontend visibility checks are not a security boundary.
 
 ### Local demo mode
 
 When signed out, select Collector, Recycler, or Admin to preview the dashboards and simulated workflow. Demo records are stored in this browser's `localStorage`. They are not authenticated, shared with other users, or protected by database RLS.
+
+## Recycling evidence verification (new follow-up migration)
+
+The optional `20261030000000_recycling_evidence_verification.sql` migration adds a private Supabase Storage bucket and a participant-scoped evidence table. The accepted Recycler can upload JPG, PNG, WebP, or PDF evidence (maximum 10 MB per file) after collection. The lot Collector and Admin can read the evidence through short-lived signed URLs; the accepted Recycler can also read their own lot's evidence.
+
+Only an Admin can approve or reject a pending evidence record through `review_recycling_evidence`. Approval moves a lot from `recycling_review` to `recycled`; rejection leaves it in review and records the Admin's note. A database trigger blocks any other workflow path from marking a lot recycled without an approved evidence record. Evidence and approval are platform records, not independent proof of physical recycling or a government-issued certificate.
+
+This migration is **not applied automatically** by this repository. It has been manually applied and verified in the `Scarap-Yukti_Test` Supabase project; it has not been applied to production. Before applying it to any other project, inspect that project's migration history and schema, and do not rerun it if its objects already exist. The Recycler upload and Admin review interfaces are wired into the connected dashboards. Files are served through short-lived signed URLs from a private bucket.
 
 ## Build and preview
 
@@ -133,7 +145,7 @@ These local tests cover shared demo workflow logic and check expected frontend/m
 
 ## Limitations
 
-- The Admin evidence/review note is text recorded in the database. It does not independently prove that pickup or physical recycling occurred.
+- An approved evidence record is a platform review record. It does not independently prove that physical recycling occurred and is not a government-issued certificate.
 - The app does not verify Collector or Recycler identity/business licenses, arrange physical pickup, process payments, or certify recycling.
 - Connected behavior depends on the Supabase project having the expected migrations, RLS policies, RPCs, and Auth URL configuration. This README does not independently verify current hosted settings.
 - The automated tests do not replace browser testing or authorization checks against the deployed Supabase project; manually test the connected workflow and database permissions before a pilot.
