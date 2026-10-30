@@ -11,6 +11,7 @@ import { raiseDispute, recordHandoverWeight } from "./lib/lotActions.js";
 import { getTraceabilityActionState } from "./lib/traceabilityView.js";
 import { applyDemoWorkflowTransition, decideDemoOffer } from "./lib/workflowRules.js";
 import { normalizeDemoPickupAppointment, respondToDemoPickupAppointment, validatePickupSchedule, validateRescheduleRequest } from "./lib/pickupAppointmentRules.js";
+import { createRecyclingEvidenceUrl, reviewRecyclingEvidence, uploadRecyclingEvidence } from "./lib/recyclingEvidence.js";
 
 const STORAGE_KEY = "scarap-yukti-demo-v1";
 const DEMO_COLLECTOR = "Demo Collector";
@@ -130,6 +131,9 @@ export default function App() {
   const [categoryFilter, setCategoryFilter] = useState("All categories");
   const [locationFilter, setLocationFilter] = useState("All locations");
   const [evidenceDrafts, setEvidenceDrafts] = useState({});
+  const [evidenceReviewDrafts, setEvidenceReviewDrafts] = useState({});
+  const [evidenceBusyLotId, setEvidenceBusyLotId] = useState(null);
+  const [evidenceReviewBusyId, setEvidenceReviewBusyId] = useState(null);
   const [disputeDrafts, setDisputeDrafts] = useState({});
   const [workflowBusyLotId, setWorkflowBusyLotId] = useState(null);
   const [pickupBusyLotId, setPickupBusyLotId] = useState(null);
@@ -526,16 +530,18 @@ export default function App() {
       return false;
     }
     const cleanNote = note.trim();
-    if (["recycling_review", "disputed"].includes(nextStatus) && (cleanNote.length < 10 || cleanNote.length > 500)) {
-      notify(nextStatus === "disputed"
-        ? "Enter a dispute reason between 10 and 500 characters."
-        : "Enter an evidence/review note between 10 and 500 characters.", "error");
+    if (nextStatus === "recycled") {
+      notify("A lot can only be marked recycled by approving its submitted evidence.", "error");
+      return false;
+    }
+    if (nextStatus === "disputed" && (cleanNote.length < 10 || cleanNote.length > 500)) {
+      notify("Enter a dispute reason between 10 and 500 characters.", "error");
       return false;
     }
     const successMessages = {
       collected: "Lot marked collected.",
-      recycling_review: "Evidence/review note saved and lot moved to recycling review.",
-      recycled: "Lot marked recycled after the saved evidence note was checked.",
+      recycling_review: "Recycling review opened. The accepted Recycler can now upload evidence.",
+      recycled: "A lot can only be marked recycled by approving its submitted evidence.",
       disputed: "Lot flagged for Admin review.",
       resume: "Lot workflow resumed from its saved status."
     };
@@ -592,6 +598,68 @@ export default function App() {
     onWeight: (id, value) => runTraceAction("weight", id, value),
     onDispute: (id, value) => runTraceAction("dispute", id, value)
   };
+
+  async function submitRecyclingEvidence(lotId, file, description) {
+    if (!authSession || !supabase || profile?.role !== "recycler" || !authSession.user?.id) {
+      notify("A signed-in Recycler account is required to upload recycling evidence.", "error");
+      return false;
+    }
+    const lot = connectedData?.lots.find(item => item.id === lotId);
+    if (!lot || !["Collected", "Recycling review"].includes(lot.status)
+      || !lot.offers.some(offer => offer.recyclerId === authSession.user.id && offer.status === "accepted")) {
+      notify("Only the accepted Recycler can upload evidence after collection. Refresh the marketplace.", "error");
+      return false;
+    }
+
+    setEvidenceBusyLotId(lotId);
+    try {
+      await uploadRecyclingEvidence({ lotId, userId: authSession.user.id, file, description });
+      setReloadToken(value => value + 1);
+      notify("Recycling evidence uploaded privately. It is now awaiting Admin review.");
+      return true;
+    } catch (error) {
+      notify(error.message || "The recycling evidence could not be uploaded.", "error");
+      return false;
+    } finally {
+      setEvidenceBusyLotId(null);
+    }
+  }
+
+  async function decideRecyclingEvidence(evidenceId, decision) {
+    if (!authSession || !supabase || profile?.role !== "admin") {
+      notify("A signed-in Admin account is required to review recycling evidence.", "error");
+      return false;
+    }
+    const note = evidenceReviewDrafts[evidenceId] || "";
+    setEvidenceReviewBusyId(evidenceId);
+    try {
+      await reviewRecyclingEvidence(evidenceId, decision, note);
+      setEvidenceReviewDrafts(prev => ({ ...prev, [evidenceId]: "" }));
+      setReloadToken(value => value + 1);
+      notify(decision === "approved"
+        ? "Evidence approved. The lot is now marked recycled."
+        : "Evidence rejected. The lot remains in recycling review.");
+      return true;
+    } catch (error) {
+      notify(error.message || "The evidence review could not be saved.", "error");
+      return false;
+    } finally {
+      setEvidenceReviewBusyId(null);
+    }
+  }
+
+  async function openRecyclingEvidence(storagePath) {
+    try {
+      const url = await createRecyclingEvidenceUrl(storagePath);
+      const link = document.createElement("a");
+      link.href = url;
+      link.target = "_blank";
+      link.rel = "noopener noreferrer";
+      link.click();
+    } catch (error) {
+      notify(error.message || "The private evidence file could not be opened.", "error");
+    }
+  }
 
   async function decideOffer(lotId, offerId, decision) {
     if (authSession) {
@@ -875,6 +943,12 @@ export default function App() {
   const myOffers = viewData.lots.flatMap(lot => lot.offers.filter(offer => authSession
     ? offer.recyclerId === authSession.user.id
     : offer.recycler === DEMO_RECYCLER).map(offer => ({ ...offer, lot })));
+  const evidenceByLot = new Map();
+  for (const evidence of connectedData?.recyclingEvidence || []) {
+    const items = evidenceByLot.get(evidence.lotId) || [];
+    items.push(evidence);
+    evidenceByLot.set(evidence.lotId, items);
+  }
   const collectorLots = viewData.lots.filter(lot => authSession
     ? lot.collectorId === authSession.user.id
     : lot.collector === DEMO_COLLECTOR);
