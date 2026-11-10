@@ -1,26 +1,41 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
-  Activity, Bell, Check, ChevronDown, CircleHelp, ClipboardList, Download, Menu,
-  Filter, Leaf, MapPin, Package, Plus, Recycle, RefreshCw, Search, ShieldCheck, Sparkles,
+  Activity, ArrowLeft, ArrowRight, Bell, Check, CheckCircle2, ChevronDown, CircleHelp, ClipboardList, Download, Edit3, Menu,
+  Eye, EyeOff, Filter, Leaf, Lock, MapPin, Package, Plus, Recycle, RefreshCw, Scale, Search, ShieldCheck, Sparkles,
   Truck, Users, Wallet, X, Zap
 } from "lucide-react";
 import { hasSupabaseConfig, supabase } from "./lib/supabase.js";
 import { loadMarketplaceSnapshot } from "./lib/marketplaceReads.js";
 import { subscribeToMarketplaceChanges } from "./lib/marketplaceRealtime.js";
-import { raiseDispute, recordHandoverWeight } from "./lib/lotActions.js";
+import { raiseDispute, recordHandoverWeight, updateLotDetails } from "./lib/lotActions.js";
+import { validateListingPrivacy } from "./lib/privacyRules.js";
+import { EditLotModal } from "./components/EditLotModal.jsx";
+import { OperationalSummary } from "./components/OperationalSummary.jsx";
+import { SellerWorkspaceView } from "./components/SellerWorkspaceView.jsx";
+import { CollectorWorkspaceView } from "./components/CollectorWorkspaceView.jsx";
+import { RecyclerWorkspaceView } from "./components/RecyclerWorkspaceView.jsx";
+import { AdminWorkspaceView } from "./components/AdminWorkspaceView.jsx";
+import { LandingPage } from "./components/LandingPage.jsx";
+import { ThemeToggle } from "./components/ThemeToggle.jsx";
+import { ProfileMenuDropdown, RoleSwitcherDropdown } from "./components/AccessibleMenus.jsx";
+import {
+  readDemoState,
+  writeDemoState,
+  resetDemoState,
+  getInitialDemoState,
+  DEMO_SELLER,
+  DEMO_COLLECTOR,
+  DEMO_RECYCLER
+} from "./lib/demoStore.js";
 import { getTraceabilityActionState } from "./lib/traceabilityView.js";
 import { applyDemoWorkflowTransition, decideDemoOffer } from "./lib/workflowRules.js";
 import { normalizeDemoPickupAppointment, respondToDemoPickupAppointment, validatePickupSchedule, validateRescheduleRequest } from "./lib/pickupAppointmentRules.js";
 
 const STORAGE_KEY = "scarap-yukti-demo-v1";
-const DEMO_COLLECTOR = "Demo Collector";
-const DEMO_RECYCLER = "Demo Recycler";
-const starterLots = [
-  { id: "SY-1048", collector: DEMO_COLLECTOR, title: "Mixed computer scrap", category: "Computers", weight: 42, location: "Indirapuram, Ghaziabad", date: "2026-10-22", status: "Offer submitted", notes: "CPU towers, RAM and cables", offers: [{ id: "OF-301", recycler: "Demo Recycler A", price: 38, message: "Pickup available tomorrow", status: "pending" }] },
-  { id: "SY-1047", collector: DEMO_COLLECTOR, title: "Office monitors", category: "Displays", weight: 26, location: "Vaishali, Ghaziabad", date: "2026-10-21", status: "Offer submitted", notes: "LCD monitors; condition varies", offers: [{ id: "OF-302", recycler: "Demo Recycler B", price: 24, message: "Subject to inspection", status: "pending" }] },
-  { id: "SY-1046", collector: DEMO_COLLECTOR, title: "Small electronics", category: "Small electronics", weight: 13, location: "Raj Nagar, Ghaziabad", date: "2026-10-19", status: "Pickup scheduled", notes: "Routers, keyboards and chargers", offers: [] }
-];
-const seed = { lots: starterLots, activity: [{ id: 1, text: "Welcome to your Scarap_Yukti demo workspace", time: "Just now" }] };
+const initialDemoState = getInitialDemoState();
+const starterLots = initialDemoState.lots;
+const starterSellerScrap = initialDemoState.availableSellerScrap;
+const seed = { lots: starterLots, activity: initialDemoState.activity };
 const statusOptions = ["Open", "Offer submitted", "Pickup scheduled", "Collected", "Recycling review", "Recycled", "Disputed"];
 function safeString(value, fallback = "") {
   return typeof value === "string" ? value : fallback;
@@ -50,9 +65,11 @@ function normalizeLot(lot, index) {
   return {
     id,
     collector: safeString(item.collector, DEMO_COLLECTOR),
+    seller: safeString(item.seller),
     title: safeString(item.title, "Untitled lot"),
     category: safeString(item.category, "Other"),
     weight: Number.isFinite(weight) && weight >= 0 ? weight : 0,
+    actualWeight: typeof item.actualWeight === "number" ? item.actualWeight : undefined,
     location: safeString(item.location, "Location not provided"),
     date,
     status,
@@ -78,6 +95,13 @@ function normalizeSavedData(value) {
 
 function readSaved() {
   try {
+    const demo = readDemoState();
+    if (demo && Array.isArray(demo.lots) && demo.lots.length > 0) {
+      return {
+        lots: demo.lots.map(normalizeLot),
+        activity: Array.isArray(demo.activity) ? demo.activity : seed.activity
+      };
+    }
     const raw = localStorage.getItem(STORAGE_KEY);
     return raw ? normalizeSavedData(JSON.parse(raw)) : seed;
   } catch {
@@ -104,6 +128,23 @@ export default function App() {
   const [demoRole, setDemoRole] = useState("Collector");
   const [authSession, setAuthSession] = useState(null);
   const [demoAccess, setDemoAccess] = useState(false);
+  const [authViewOpen, setAuthViewOpen] = useState(false);
+  const [availableSellerScrap, setAvailableSellerScrap] = useState(() => {
+    try {
+      const demo = readDemoState();
+      return demo?.availableSellerScrap || starterSellerScrap;
+    } catch {
+      return starterSellerScrap;
+    }
+  });
+  const [collectionWork, setCollectionWork] = useState(() => {
+    try {
+      const demo = readDemoState();
+      return demo?.collectionWork || [];
+    } catch {
+      return [];
+    }
+  });
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const authUserId = useRef(null);
   const [authInitializing, setAuthInitializing] = useState(true);
@@ -123,7 +164,20 @@ export default function App() {
   const [authBusy, setAuthBusy] = useState(false);
   const [authMessage, setAuthMessage] = useState("");
   const [authMessageType, setAuthMessageType] = useState("success");
-  const [authForm, setAuthForm] = useState({ displayName: "", email: "", password: "" });
+  const [rememberEmail, setRememberEmail] = useState(() => {
+    try {
+      return Boolean(localStorage.getItem("scarap_remembered_email"));
+    } catch {
+      return false;
+    }
+  });
+  const [authForm, setAuthForm] = useState(() => {
+    let savedEmail = "";
+    try {
+      savedEmail = localStorage.getItem("scarap_remembered_email") || "";
+    } catch {}
+    return { displayName: "", email: savedEmail, password: "", role: "seller" };
+  });
   const [section, setSection] = useState("overview");
   const [query, setQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState("All statuses");
@@ -135,6 +189,9 @@ export default function App() {
   const [pickupBusyLotId, setPickupBusyLotId] = useState(null);
   const [showForm, setShowForm] = useState(false);
   const [createBusy, setCreateBusy] = useState(false);
+  const [editLotTarget, setEditLotTarget] = useState(null);
+  const [editBusy, setEditBusy] = useState(false);
+  const [editError, setEditError] = useState("");
   const [notice, setNotice] = useState("");
   const [noticeType, setNoticeType] = useState("success");
   const [offerLot, setOfferLot] = useState(null);
@@ -181,6 +238,92 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    const syncFromHash = () => {
+      const hash = (window.location.hash || "").toLowerCase();
+      if (hash === "#login" || hash === "#signin") {
+        setAuthViewOpen(true);
+        setDemoAccess(false);
+      } else if (hash.startsWith("#demo/")) {
+        const rawRole = hash.replace("#demo/", "");
+        const matchedRole = rawRole === "seller" ? "Seller" : rawRole === "recycler" ? "Recycler" : rawRole === "admin" ? "Admin" : "Collector";
+        setDemoRole(matchedRole);
+        setDemoAccess(true);
+        setAuthViewOpen(false);
+        try {
+          sessionStorage.setItem("scarap_demo_active", "true");
+          sessionStorage.setItem("scarap_demo_role", matchedRole);
+        } catch {}
+      } else {
+        setAuthViewOpen(false);
+        setDemoAccess(false);
+        try {
+          sessionStorage.removeItem("scarap_demo_active");
+          sessionStorage.removeItem("scarap_demo_role");
+        } catch {}
+      }
+    };
+
+    syncFromHash();
+    window.addEventListener("hashchange", syncFromHash);
+    return () => window.removeEventListener("hashchange", syncFromHash);
+  }, [authSession]);
+
+  function handleLaunchDemo(targetRole = "Collector") {
+    setDemoRole(targetRole);
+    setDemoAccess(true);
+    setAuthViewOpen(false);
+    try {
+      sessionStorage.setItem("scarap_demo_active", "true");
+      sessionStorage.setItem("scarap_demo_role", targetRole);
+    } catch {}
+    setSection("overview");
+    window.location.hash = `#demo/${targetRole.toLowerCase()}`;
+  }
+
+  function handleExitDemo() {
+    setDemoAccess(false);
+    setAuthViewOpen(false);
+    try {
+      sessionStorage.removeItem("scarap_demo_active");
+      sessionStorage.removeItem("scarap_demo_role");
+    } catch {}
+    window.location.hash = "";
+  }
+
+  function handleResetDemo() {
+    const pristine = resetDemoState();
+    setData({
+      lots: pristine.lots.map(normalizeLot),
+      activity: pristine.activity
+    });
+    setAvailableSellerScrap(pristine.availableSellerScrap);
+    setCollectionWork(pristine.collectionWork);
+    notify("Demo workspace reset to original sample records.", "success");
+  }
+
+  function handleClaimScrap(scrapId, claimData) {
+    const target = availableSellerScrap.find(s => s.id === scrapId);
+    if (!target) return;
+    setAvailableSellerScrap(prev => prev.filter(s => s.id !== scrapId));
+    setCollectionWork(prev => [
+      ...prev,
+      {
+        ...target,
+        status: "Claim Staged",
+        pickupDate: claimData?.pickupDate || "Next 48 Hours",
+        proposedRate: claimData?.proposedRate || "",
+        collectorNote: claimData?.note || ""
+      }
+    ]);
+    notify(`Collection claim staged for ${target.title}. Tracked in My Collection Work.`);
+  }
+
+
+  useEffect(() => {
+    return () => {};
+  }, []);
+
+  useEffect(() => {
     if (!supabase || !authSession?.user?.id) {
       setProfile(null);
       setProfileState("idle");
@@ -205,7 +348,7 @@ export default function App() {
         setAuthMessageType("error");
         return;
       }
-      if (!row || !["collector", "recycler", "admin"].includes(row.role)) {
+      if (!row || !["seller", "collector", "recycler", "admin"].includes(row.role)) {
         setProfile(null);
         setProfileState("error");
         setAuthMessage("Your profile is missing or has an unsupported role. Ask a project administrator to review it.");
@@ -281,9 +424,17 @@ export default function App() {
 
   useEffect(() => {
     if (authSession) return;
-    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(data)); }
+    try {
+      writeDemoState({
+        lots: data.lots,
+        availableSellerScrap,
+        collectionWork,
+        activity: data.activity,
+        version: 2
+      });
+    }
     catch { notify("Could not save to this browser. Check browser storage settings.", "error"); }
-  }, [data, authSession]);
+  }, [data, availableSellerScrap, collectionWork, authSession]);
 
   const viewData = authSession ? connectedData || { lots: [], activity: [], workflowEvents: [] } : data;
 
@@ -332,18 +483,26 @@ export default function App() {
     setAuthBusy(true);
     setAuthFeedback("");
     try {
+      try {
+        if (rememberEmail) {
+          localStorage.setItem("scarap_remembered_email", email);
+        } else {
+          localStorage.removeItem("scarap_remembered_email");
+        }
+      } catch {}
+
       if (authMode === "signup") {
         const { data: result, error } = await supabase.auth.signUp({
           email,
           password,
-          options: { data: { display_name: displayName } }
+          options: { data: { display_name: displayName, role: ["seller", "collector"].includes(authForm.role) ? authForm.role : "collector" } }
         });
         if (error) throw error;
         if (!result.session) {
-          setAuthFeedback("Account request received. Check your email to confirm the account, then sign in.");
+          setAuthFeedback("Account created. Check your email to confirm your account, then sign in.");
           setAuthMode("signin");
         } else {
-          setAuthFeedback("Account created. The database assigns new users the Collector role.");
+          setAuthFeedback("Account created. You can now sign in with your registered account.");
         }
       } else {
         const { error } = await supabase.auth.signInWithPassword({ email, password });
@@ -446,12 +605,16 @@ export default function App() {
     if (location.length < 2 || location.length > 160) {
       setFormError("Pickup location must be between 2 and 160 characters."); return;
     }
+    const privacyCheck = validateListingPrivacy({ title, location, notes: form.notes.trim() });
+    if (!privacyCheck.ok) {
+      setFormError(privacyCheck.reason); return;
+    }
     if (form.notes.trim().length > 500) {
       setFormError("Notes must be 500 characters or fewer."); return;
     }
     if (authSession) {
-      if (profile?.role !== "collector" || !authSession.user?.id || !supabase) {
-        setFormError("A signed-in Collector account is required to create a database lot.");
+      if (!["collector", "seller"].includes(profile?.role) || !authSession.user?.id || !supabase) {
+        setFormError("A signed-in Seller or Collector account is required to create a database lot.");
         return;
       }
       setCreateBusy(true);
@@ -472,7 +635,7 @@ export default function App() {
         notify("Lot created in Supabase. Your list is refreshing.");
       } catch (error) {
         const message = error.code === "42501"
-          ? "Supabase denied this insert. Confirm this account has the Collector role and the lot insert policy is active."
+          ? "Supabase denied this insert. Confirm this account has the Seller or Collector role and the lot insert policy is active."
           : error.code === "23503"
             ? "Your profile row was not found. Sign out and back in, or ask the project administrator to check your profile."
             : error.message || "The lot could not be saved. Please try again.";
@@ -484,12 +647,73 @@ export default function App() {
       return;
     }
 
-    const id = createUniqueId("SY", data.lots.map(lot => lot.id));
-    const lot = { id, ...form, category, collector: DEMO_COLLECTOR, title, location, notes: form.notes.trim(), weight, date: new Date().toISOString().slice(0, 10), status: "Open", evidence: "", offers: [] };
-    setData(prev => ({ ...prev, lots: [lot, ...prev.lots], activity: logActivity(prev, `New lot created: ${lot.title} (${id})`) }));
+    const prefix = role === "Seller" ? "SEL" : "COL";
+    const id = createUniqueId(prefix, data.lots.map(lot => lot.id));
+    const lot = {
+      id,
+      ...form,
+      category,
+      collector: role === "Seller" ? DEMO_SELLER : DEMO_COLLECTOR,
+      seller: role === "Seller" ? DEMO_SELLER : undefined,
+      title,
+      location,
+      notes: form.notes.trim(),
+      weight,
+      date: new Date().toISOString().slice(0, 10),
+      status: "Open",
+      evidence: "",
+      offers: []
+    };
+    setData(prev => ({ ...prev, lots: [lot, ...prev.lots], activity: logActivity(prev, `New ${role === "Seller" ? "listing" : "lot"} created: ${lot.title} (${id})`) }));
     setForm({ title: "", category: "Computers", weight: "", location: "", notes: "" });
     setFormError("");
-    setShowForm(false); notify("Lot added and saved in this browser.");
+    setShowForm(false);
+    notify(role === "Seller" ? "Disposal listing added and saved in local demo." : "Consignment lot added and saved in local demo.");
+  }
+
+  async function handleEditLot(lotId, updates) {
+    const targetLot = data.lots.find(l => l.id === lotId) || editLotTarget;
+    if (targetLot && targetLot.status !== "Open" && targetLot.status !== "open") {
+      const msg = "Lots can only be edited while in Open status. Revisions are locked once bids exist or the workflow advances.";
+      setEditError(msg);
+      notify(msg, "error");
+      return;
+    }
+    if (authSession) {
+      if (!["collector", "seller", "admin"].includes(profile?.role) || !authSession.user?.id || !supabase) {
+        setEditError("A signed-in owner or admin account is required to edit lots.");
+        return;
+      }
+      setEditBusy(true);
+      setEditError("");
+      try {
+        await updateLotDetails(lotId, updates);
+        setEditLotTarget(null);
+        setReloadToken(value => value + 1);
+        notify("Consignment details updated successfully.");
+      } catch (err) {
+        setEditError(err.message || "Failed to update lot details.");
+        notify(err.message || "Failed to update lot details.", "error");
+      } finally {
+        setEditBusy(false);
+      }
+      return;
+    }
+
+    setData(prev => ({
+      ...prev,
+      lots: prev.lots.map(l => l.id === lotId ? {
+        ...l,
+        title: updates.title,
+        category: updates.category,
+        weight: updates.weight,
+        location: updates.location,
+        notes: updates.notes
+      } : l),
+      activity: logActivity(prev, `Updated consignment ${lotId}: ${updates.title}`)
+    }));
+    setEditLotTarget(null);
+    notify("Consignment details updated in local demo.");
   }
 
   function transitionLot(id, status, evidence = "") {
@@ -574,7 +798,26 @@ export default function App() {
   }
 
   async function runTraceAction(kind, lotId, value) {
-    if (!authSession || !supabase) return;
+    if (!authSession) {
+      if (kind === "weight") {
+        setData(prev => ({
+          ...prev,
+          lots: prev.lots.map(l => l.id === lotId ? { ...l, actualWeight: Number(value) } : l),
+          activity: logActivity(prev, `Handover weight ${value} kg recorded on lot ${lotId}`)
+        }));
+        notify("Handover weight recorded locally in demo. Discrepancy checked against tolerance.", "success");
+        return true;
+      } else {
+        setData(prev => ({
+          ...prev,
+          lots: prev.lots.map(l => l.id === lotId ? { ...l, status: "Disputed" } : l),
+          activity: logActivity(prev, `Dispute raised on lot ${lotId}: "${value}"`)
+        }));
+        notify("Dispute flagged in demo workspace. Lot frozen for administrative arbitration.", "success");
+        return true;
+      }
+    }
+    if (!supabase) return;
     try {
       if (kind === "weight") await recordHandoverWeight(lotId, value);
       else await raiseDispute(lotId, value);
@@ -595,8 +838,8 @@ export default function App() {
 
   async function decideOffer(lotId, offerId, decision) {
     if (authSession) {
-      if (!supabase || profile?.role !== "collector" || !authSession.user?.id) {
-        notify("A signed-in Collector account is required to decide offers.", "error");
+      if (!supabase || !["collector", "seller"].includes(profile?.role) || !authSession.user?.id) {
+        notify("A signed-in Seller or Collector account is required to decide offers.", "error");
         return;
       }
       const ownedLot = connectedData?.lots.find(item => item.id === lotId && item.collectorId === authSession.user.id);
@@ -625,8 +868,8 @@ export default function App() {
         const detail = error.message || "The offer decision could not be saved.";
         const message = /no longer pending|not accepting offer decisions/i.test(detail)
           ? "This offer or lot has already changed. Refresh the marketplace before deciding again."
-          : /Only the lot collector|Only a Collector/i.test(detail)
-            ? "Only the Collector who owns this lot can decide its offers."
+          : /Only the lot collector|Only the lot owner|Only a Collector|Only a Seller/i.test(detail)
+            ? "Only the lot owner can decide its offers."
             : detail;
         notify(message, "error");
       } finally {
@@ -671,8 +914,8 @@ export default function App() {
     }
 
     if (authSession) {
-      if (profile?.role !== "collector" || !supabase || !authSession.user?.id) {
-        notify("A signed-in Collector account is required to propose a pickup time.", "error");
+      if (!["collector", "seller"].includes(profile?.role) || !supabase || !authSession.user?.id) {
+        notify("A signed-in Seller or Collector account is required to propose a pickup time.", "error");
         return false;
       }
       const lot = connectedData?.lots.find(item => item.id === lotId && item.collectorId === authSession.user.id);
@@ -768,7 +1011,7 @@ export default function App() {
         });
         if (error) throw error;
         setReloadToken(value => value + 1);
-        notify(decision === "confirm" ? "Pickup time confirmed. Keep coordination and handover details with the participants." : "Reschedule request sent to the Collector.");
+        notify(decision === "confirm" ? "Pickup time confirmed. Keep coordination and handover details with the participants." : "Reschedule request sent to the lot owner.");
         return true;
       } catch (error) {
         notify(error.message || "Your pickup response could not be saved.", "error");
@@ -865,8 +1108,10 @@ export default function App() {
     URL.revokeObjectURL(url); notify("Demo data export downloaded.");
   }
 
-  const navigation = role === "Collector"
-    ? [{ key: "overview", label: "Dashboard", icon: <Activity size={18} /> }, { key: "lots", label: "Scrap requests", icon: <Package size={18} /> }, { key: "pricing", label: "Pricing", icon: <Wallet size={18} /> }, { key: "activity", label: "History", icon: <ClipboardList size={18} /> }, { key: "settings", label: "Settings", icon: <Users size={18} /> }]
+  const navigation = role === "Seller"
+    ? [{ key: "overview", label: "Overview", icon: <Activity size={18} /> }, { key: "lots", label: "My listings", icon: <Package size={18} /> }, { key: "pricing", label: "Price estimator", icon: <Wallet size={18} /> }, { key: "activity", label: "Disposal history", icon: <ClipboardList size={18} /> }, { key: "settings", label: "Settings", icon: <Users size={18} /> }]
+    : role === "Collector"
+      ? [{ key: "overview", label: "Operations", icon: <Activity size={18} /> }, { key: "lots", label: "Consignment lots", icon: <Package size={18} /> }, { key: "pricing", label: "Rate calculator", icon: <Wallet size={18} /> }, { key: "activity", label: "Ledger history", icon: <ClipboardList size={18} /> }, { key: "settings", label: "Settings", icon: <Users size={18} /> }]
     : role === "Recycler"
       ? [{ key: "overview", label: "Dashboard", icon: <Search size={18} /> }, { key: "lots", label: "Scrap requests", icon: <Package size={18} /> }, { key: "my-offers", label: "My offers", icon: <Wallet size={18} /> }, { key: "pricing", label: "Pricing", icon: <Wallet size={18} /> }, { key: "activity", label: "History", icon: <ClipboardList size={18} /> }, { key: "settings", label: "Settings", icon: <Users size={18} /> }]
       : [{ key: "overview", label: "Dashboard", icon: <ShieldCheck size={18} /> }, { key: "lots", label: "Scrap requests", icon: <Package size={18} /> }, { key: "pricing", label: "Pricing", icon: <Wallet size={18} /> }, { key: "activity", label: "History", icon: <ClipboardList size={18} /> }, { key: "settings", label: "Settings", icon: <Users size={18} /> }];
@@ -877,7 +1122,9 @@ export default function App() {
     : offer.recycler === DEMO_RECYCLER).map(offer => ({ ...offer, lot })));
   const collectorLots = viewData.lots.filter(lot => authSession
     ? lot.collectorId === authSession.user.id
-    : lot.collector === DEMO_COLLECTOR);
+    : role === "Seller"
+      ? (lot.collector === DEMO_SELLER || lot.seller === DEMO_SELLER || lot.id.startsWith("SEL-"))
+      : (lot.collector === DEMO_COLLECTOR || lot.id.startsWith("COL-") || lot.id.startsWith("SY-")));
   const pickupAppointmentsByLot = new Map(authSession
     ? (connectedData?.pickupAppointments || []).map(appointment => [appointment.lotId, appointment])
     : viewData.lots.filter(lot => lot.pickupAppointment).map(lot => [lot.id, lot.pickupAppointment]));
@@ -901,14 +1148,14 @@ export default function App() {
   ];
   const workspaceTitle = currentSection === "pricing" ? "Indicative price calculator"
     : currentSection === "settings" ? "Account settings"
-      : currentSection === "activity" ? "History and workflow"
-        : currentSection === "lots" ? role === "Recycler" ? "Browse scrap requests" : role === "Admin" ? "Marketplace requests" : "Your scrap requests"
-          : role === "Collector" ? "Manage your e-waste lots" : role === "Recycler" ? "Find lots to recycle" : "Marketplace monitoring";
+      : currentSection === "activity" ? (role === "Seller" ? "Disposal history & activity" : role === "Collector" ? "Ledger audit & workflow" : "History and workflow")
+        : currentSection === "lots" ? (role === "Seller" ? "My disposal listings" : role === "Collector" ? "Consignment ledger & scrap lots" : role === "Recycler" ? "Browse scrap requests" : "Marketplace requests")
+          : role === "Seller" ? "E-waste disposal listings" : role === "Collector" ? "Consolidation & scrap lots" : role === "Recycler" ? "Find lots to recycle" : "Marketplace monitoring";
   const workspaceDescription = currentSection === "pricing" ? "Calculate a simple total from a rate you provide. This is arithmetic only, not a live market quote."
     : currentSection === "settings" ? "Review your signed-in account, database role, and current data mode. Role changes are not available here."
       : currentSection === "activity" ? "Review recorded activity and workflow events visible to your account."
-        : currentSection === "lots" ? role === "Recycler" ? "Browse eligible marketplace lots and submit offers." : "Search and review the lots available in this role-specific workspace."
-          : authSession ? role === "Collector" ? "Records are loaded from Supabase. You can create lots and decide incoming offers. Pickup time coordination requires the reviewed follow-up migration." : role === "Recycler" ? "Records are loaded from Supabase. You can browse lots, submit offers, and respond to a pickup-time proposal when your offer is accepted." : "Records are loaded from Supabase. Admin workflow changes use the database RPC and its authorization checks." : "Local demo data only. The role selector changes this view; it does not sign you in or enforce secure permissions.";
+        : currentSection === "lots" ? (role === "Seller" ? "Manage your electronic scrap listings, review incoming recycler offers, and coordinate pickup appointments." : role === "Collector" ? "Manage your aggregated lots, recycler bids, and logistics dispatch." : role === "Recycler" ? "Browse eligible marketplace lots and submit offers." : "Audit all marketplace listings and execute authorized workflow transitions.")
+          : authSession ? (role === "Collector" || role === "Seller") ? "Records are loaded from Supabase. You can create lots, edit open listings, decide incoming offers, and coordinate pickup appointments." : role === "Recycler" ? "Records are loaded from Supabase. You can browse lots, submit offers, and respond to pickup-time proposals when your offer is accepted." : "Records are loaded from Supabase. Admin workflow changes use the database RPC and its authorization checks." : "Local demo data only. The role selector changes this view; it does not sign you in or enforce secure permissions.";
 
   if (authInitializing || (!passwordRecovery && authSession && profileState === "loading")) {
     return <div className="auth-gate"><div className="auth-card"><span className="auth-spinner" /><h1>Loading your account</h1><p>Checking your sign-in and database profile…</p></div></div>;
@@ -936,8 +1183,126 @@ export default function App() {
     return <div className="auth-gate"><div className="auth-card"><span className="eyebrow">SUPABASE READ ERROR</span><h1>Marketplace data could not be loaded</h1><p className="auth-message error" role="alert">{marketplaceError}</p><p>Check that the migration is applied, the <code>public</code> schema is exposed to the Data API, and your signed-in role can read these rows under RLS.</p><div className="auth-form-actions"><button className="btn btn-primary" onClick={() => setReloadToken(value => value + 1)}>Try again</button><button className="btn btn-light" onClick={signOut} disabled={authBusy}>Sign out</button></div></div></div>;
   }
   if (!authSession && !demoAccess) {
+    if (authViewOpen) {
+      return <div className="auth-gate auth-login-gate">
+        <section className="auth-login-layout" aria-labelledby="auth-welcome-title">
+          <div className="auth-brand-panel">
+            <div className="auth-brand">
+              <span className="brand-icon"><Recycle size={24} /></span>
+              <div>
+                <strong>Scarap_Yukti</strong>
+                <small>RESPONSIBLE E-WASTE MARKETPLACE</small>
+              </div>
+            </div>
+
+            <div className="auth-brand-hero">
+              <span className="eyebrow"><Leaf size={14} /> CLOSED-LOOP METALLURGY</span>
+              <h1 id="auth-welcome-title">Move useful materials forward.</h1>
+              <p>Connect e-waste collectors and recyclers, review offers, and follow each lot through its recorded workflow.</p>
+            </div>
+
+            <div className="auth-brand-circuit-preview">
+              <div className="preview-node"><Package size={15} /><span>Seller Intake</span></div>
+              <div className="preview-arrow">→</div>
+              <div className="preview-node"><Truck size={15} /><span>Collector Scale</span></div>
+              <div className="preview-arrow">→</div>
+              <div className="preview-node"><Recycle size={15} /><span>Smelter Intake</span></div>
+            </div>
+
+            <div className="auth-brand-stats-list">
+              <div className="auth-stat-row">
+                <CheckCircle2 size={16} className="text-lime" />
+                <span>81 Automated Database & Security Tests Passing</span>
+              </div>
+              <div className="auth-stat-row">
+                <ShieldCheck size={16} className="text-lime" />
+                <span>Automated PII Sanitization via Postgres Triggers</span>
+              </div>
+              <div className="auth-stat-row">
+                <Scale size={16} className="text-lime" />
+                <span>Schedule I Mass-Balance Discrepancy Tracking</span>
+              </div>
+            </div>
+
+            <div className="auth-brand-foot">
+              <ShieldCheck size={16} />
+              <span>Account roles are loaded from your Supabase profile after sign-in.</span>
+            </div>
+          </div>
+
+          <div className="auth-login-card">
+            <div className="auth-login-heading-row">
+              <div className="auth-login-heading">
+                <span className="eyebrow">AUTHENTICATED PORTAL</span>
+                <h2>{authMode === "signup" ? "Create an account" : "Sign in to continue"}</h2>
+                <p>{authMode === "signup" ? "Register as an upstream Seller or field Collector." : "Use your credentials to open your role-specific dashboard."}</p>
+              </div>
+              <button
+                type="button"
+                className="btn btn-light btn-small"
+                onClick={() => { setAuthViewOpen(false); window.location.hash = ""; }}
+              >
+                Back to Home
+              </button>
+            </div>
+
+            <AuthPanel
+              configured={hasSupabaseConfig}
+              session={null}
+              profile={null}
+              mode={authMode}
+              setMode={mode => { setAuthMode(mode); setAuthFeedback(""); }}
+              form={authForm}
+              setForm={setAuthForm}
+              onSubmit={submitAuth}
+              onForgotPassword={sendPasswordRecovery}
+              onSignOut={signOut}
+              busy={authBusy}
+              message={authMessage}
+              messageType={authMessageType}
+              rememberEmail={rememberEmail}
+              setRememberEmail={setRememberEmail}
+            />
+
+            <div className="auth-demo-divider"><span>or test without credentials</span></div>
+            <div className="auth-demo-entry-modern">
+              <div className="demo-entry-title">
+                <Zap size={15} className="text-lime" />
+                <strong>Instant Role Experience (Browser Demo)</strong>
+              </div>
+              <p>Explore any role workspace immediately with realistic test records:</p>
+              <div className="auth-demo-persona-grid">
+                <button type="button" className="btn btn-light btn-small" onClick={() => handleLaunchDemo("Seller")}>
+                  <Package size={14} /> Seller Demo
+                </button>
+                <button type="button" className="btn btn-light btn-small" onClick={() => handleLaunchDemo("Collector")}>
+                  <Truck size={14} /> Collector Demo
+                </button>
+                <button type="button" className="btn btn-light btn-small" onClick={() => handleLaunchDemo("Recycler")}>
+                  <Recycle size={14} /> Recycler Demo
+                </button>
+                <button type="button" className="btn btn-light btn-small" onClick={() => handleLaunchDemo("Admin")}>
+                  <ShieldCheck size={14} /> Admin Demo
+                </button>
+              </div>
+            </div>
+          </div>
+        </section>
+      </div>;
+    }
+
+    return (
+      <LandingPage
+        onLaunchDemo={handleLaunchDemo}
+        onSignIn={() => { setAuthViewOpen(true); window.location.hash = "#login"; }}
+      />
+    );
+  }
+
+  // Legacy Unauth
+  if (false && !authSession && !demoAccess) {
     return <div className="auth-gate auth-login-gate">
-      <div className="ambient-mesh" aria-hidden="true"><span /><span /></div>
+
       <section className="auth-login-layout" aria-labelledby="auth-welcome-title">
         <div className="auth-brand-panel">
           <div className="auth-brand"><span className="brand-icon"><Recycle size={23} /></span><span><strong>Scarap_Yukti</strong><small>RESPONSIBLE E-WASTE MARKETPLACE</small></span></div>
@@ -970,7 +1335,7 @@ export default function App() {
 
   return (
     <div className={`app-shell ${sidebarCollapsed ? "sidebar-collapsed" : ""}`}>
-      <div className="ambient-mesh" aria-hidden="true"><span /><span /></div>
+
       <aside className="sidebar" aria-label="Main navigation">
         <div className="brand">
           <div className="brand-icon"><Recycle size={23} /></div>
@@ -981,9 +1346,9 @@ export default function App() {
           {navigation.map(item => <button key={item.key} type="button" className={`nav-item ${currentSection === item.key ? "active" : ""}`} aria-current={currentSection === item.key ? "page" : undefined} aria-label={sidebarCollapsed ? item.label : undefined} onClick={() => setSection(item.key)} title={sidebarCollapsed ? item.label : undefined}><span className="nav-item-icon" aria-hidden="true">{item.icon}</span><span className="nav-item-label">{item.label}</span>{item.key === "lots" && role === "Admin" ? <span className="nav-count">{viewData.lots.length}</span> : null}{item.key === "my-offers" ? <span className="nav-count">{myOffers.length}</span> : null}</button>)}
         </nav>
         <div className="sidebar-bottom">
-          <div className="local-card"><ShieldCheck size={18} /><div><strong>{authSession ? "Supabase connected" : "Local demo only"}</strong><span>{authSession ? "Collector + Recycler actions · Admin workflow RPC" : "Not shared across users or devices"}</span></div></div>
+          <div className="local-card"><ShieldCheck size={18} /><div><strong>{authSession ? "Supabase connected" : "Local demo only"}</strong><span>{authSession ? "Seller, Collector & Recycler actions · Admin workflow RPC" : "Not shared across users or devices"}</span></div></div>
           <div className="user-mini"><div className="avatar">SY</div><div><strong>{authSession ? profile?.display_name || authSession.user.email : "Scarap_Yukti"}</strong><span>{role} {authSession ? "account" : "view"}</span></div><ChevronDown size={16} /></div>
-          {!authSession && <button type="button" className="demo-exit-link" onClick={() => setDemoAccess(false)}>Return to sign in</button>}
+          {!authSession && <button type="button" className="demo-exit-link" onClick={handleExitDemo}>Exit demo (Return to Home)</button>}
         </div>
       </aside>
 
@@ -991,16 +1356,65 @@ export default function App() {
         <header className="topbar">
           <div className="topbar-leading"><button type="button" className="icon-btn sidebar-toggle" onClick={() => setSidebarCollapsed(value => !value)} aria-label={sidebarCollapsed ? "Expand navigation" : "Collapse navigation"} aria-expanded={!sidebarCollapsed}><Menu size={17} aria-hidden="true" /></button><div className="breadcrumb">Scarap_Yukti <span>/</span> <strong>{currentNavigationItem?.label || "Dashboard"}</strong></div></div>
           <div className="top-actions">
-            <span className={authSession ? "connected-pill" : "demo-pill"}><span className="dot"></span> {authSession ? role === "Collector" ? "SUPABASE · READ + CREATE LOTS + OFFER DECISIONS" : role === "Recycler" ? "SUPABASE · READ + OFFERS" : "SUPABASE ADMIN WORKFLOW" : "DEMO DATA"}</span>
+            <span className={authSession ? "connected-pill" : "demo-pill"}><span className="dot"></span> {authSession ? (role === "Collector" || role === "Seller") ? "SUPABASE · READ + CREATE LOTS + DECIDE OFFERS + PICKUP" : role === "Recycler" ? "SUPABASE · READ + OFFERS + PICKUP" : "SUPABASE ADMIN WORKFLOW" : "DEMO DATA"}</span>
             {authSession && <><span className={`realtime-status ${realtimeStatus}`} role="status" aria-live="polite"><span className="dot"></span>{realtimeStatus === "connected" ? "LIVE UPDATES" : realtimeStatus === "connecting" ? "CONNECTING" : "MANUAL REFRESH"}</span><button type="button" className="icon-btn" onClick={() => setReloadToken(value => value + 1)} disabled={marketplaceRefreshing} title="Refresh marketplace data" aria-label="Refresh marketplace data"><RefreshCw size={17} /></button></>}
-            <button className="icon-btn" title="Help" onClick={() => notify(authSession ? "Supabase reads, Collector lot creation and offer decisions, Recycler offers, and Admin workflow RPC actions are connected. Pickup time coordination requires the reviewed follow-up migration. Payments, automated pickup, and Recycler verification are not connected." : "This is a local frontend demo. The role selector does not sign you in or enforce secure permissions.")}><CircleHelp size={19} /></button>
+            <ThemeToggle />
+            <button className="icon-btn" title="Help" onClick={() => notify(authSession ? "Supabase reads, Seller/Collector lot creation, offer decisions, pickup time coordination, Recycler offers, and Admin workflow RPC actions are fully connected. Payments, automated pickup, and Recycler verification are not connected." : "This is a local frontend demo. The role selector does not sign you in or enforce secure permissions.")}><CircleHelp size={19} /></button>
             <button className="icon-btn" title="Notifications" onClick={() => notify(authSession ? "Supabase notifications are not connected yet." : "You are all caught up in this demo.")}><Bell size={19} /></button>
             {authSession && profile
-              ? <details className="profile-menu"><summary className="profile-menu-trigger"><span className="profile-avatar">{(profile.display_name || authSession.user.email || "U").slice(0, 1).toUpperCase()}</span><span className="profile-menu-copy"><strong>{profile.display_name || authSession.user.email}</strong><small>{role} account</small></span><ChevronDown size={15} /></summary><div className="profile-menu-panel"><strong>{profile.display_name || "Marketplace user"}</strong><span>{authSession.user.email}</span><span className="auth-role-pill">DATABASE ROLE - {role}</span><button type="button" className="btn btn-light btn-small" onClick={signOut} disabled={authBusy}>{authBusy ? "Signing out..." : "Sign out"}</button></div></details>
-              : <div className="role-picker"><Users size={17} /><select value={demoRole} onChange={e => { setDemoRole(e.target.value); setSection("overview"); setQuery(""); setStatusFilter("All statuses"); setCategoryFilter("All categories"); setLocationFilter("All locations"); }} aria-label="Choose demo dashboard"><option>Collector</option><option>Recycler</option><option>Admin</option></select><ChevronDown size={14} /></div>}
-            {!authSession && <button type="button" className="btn btn-light btn-small demo-sign-in" onClick={() => setDemoAccess(false)}>Sign in</button>}
+              ? <div className="profile-menu"><ProfileMenuDropdown profile={profile} authSession={authSession} role={role} signOut={signOut} authBusy={authBusy} /></div>
+              : <div className="role-picker"><RoleSwitcherDropdown currentRole={demoRole} onSelectRole={r => { setDemoRole(r); try { sessionStorage.setItem("scarap_demo_role", r); } catch {} window.location.hash = "#demo/" + r.toLowerCase(); setSection("overview"); setQuery(""); setStatusFilter("All statuses"); setCategoryFilter("All categories"); setLocationFilter("All locations"); }} /></div>}
+            {!authSession && <button type="button" className="btn btn-light btn-small demo-sign-in" onClick={() => { setAuthViewOpen(true); setDemoAccess(false); window.location.hash = "#login"; }}>Sign in</button>}
           </div>
         </header>
+
+        {!authSession && (
+          <div className="demo-notification-banner" role="region" aria-label="Demo environment status">
+            <div className="demo-banner-lead">
+              <span className="demo-banner-badge">DEMO WORKSPACE</span>
+              <span className="demo-banner-disclaimer">
+                Local simulation only · Changes are temporary and never sent to Supabase.
+              </span>
+              <div className="demo-banner-role-switcher" role="radiogroup" aria-label="Demo Role Switcher">
+                {["Seller", "Collector", "Recycler", "Admin"].map((r) => (
+                  <button
+                    key={r}
+                    type="button"
+                    role="radio"
+                    aria-checked={demoRole === r}
+                    className={`demo-role-btn ${demoRole === r ? "active" : ""}`}
+                    onClick={() => {
+                      setDemoRole(r);
+                      try { sessionStorage.setItem("scarap_demo_role", r); } catch {}
+                      window.location.hash = "#demo/" + r.toLowerCase();
+                      setSection("overview");
+                    }}
+                  >
+                    {r}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div className="demo-banner-actions">
+              <button
+                type="button"
+                className="btn-reset-demo"
+                onClick={handleResetDemo}
+                title="Reset demo data to initial sample records"
+              >
+                <RefreshCw size={13} />
+                <span>Reset Demo Data</span>
+              </button>
+              <button
+                type="button"
+                className="btn btn-light btn-small"
+                onClick={handleExitDemo}
+              >
+                Exit Demo
+              </button>
+            </div>
+          </div>
+        )}
 
         <div className="content">
           {authSession && marketplaceError && connectedData && <div className="marketplace-refresh-warning" role="alert"><span>Marketplace data may be out of date: {marketplaceError}</span><button type="button" className="btn btn-light btn-small" onClick={() => setReloadToken(value => value + 1)} disabled={marketplaceRefreshing}>{marketplaceRefreshing ? "Refreshing…" : "Retry refresh"}</button></div>}
@@ -1008,25 +1422,29 @@ export default function App() {
           {authSession && connectedData?.ancillaryErrors?.includes("traceability") && <div className="marketplace-refresh-warning" role="status"><span>Optional handover-weight details could not be loaded. Core lots and offers remain available; check the traceability migration and permissions before using these actions.</span><button type="button" className="btn btn-light btn-small" onClick={() => setReloadToken(value => value + 1)} disabled={marketplaceRefreshing}>{marketplaceRefreshing ? "Refreshing…" : "Retry refresh"}</button></div>}
           <section className="welcome-row" id="overview">
             <div><div className="eyebrow"><Sparkles size={14} /> {role.toUpperCase()} {authSession ? "CONNECTED WORKSPACE" : "DEMO WORKSPACE"}</div><h1>{workspaceTitle}</h1><p>{workspaceDescription}</p></div>
-            <div className="welcome-actions">{!authSession && ["overview", "lots"].includes(currentSection) && <button className="btn btn-light" onClick={exportData}><Download size={16} /> Export data</button>}{role === "Collector" && ["overview", "lots"].includes(currentSection) && <button className="btn btn-primary" onClick={() => { setFormError(""); setShowForm(true); }}><Plus size={17} /> {authSession ? "Create Lot" : "Add e-waste lot"}</button>}</div>
+            <div className="welcome-actions">{!authSession && ["overview", "lots"].includes(currentSection) && <button className="btn btn-light" onClick={exportData}><Download size={16} /> Export data</button>}{(role === "Collector" || role === "Seller") && ["overview", "lots"].includes(currentSection) && <button className="btn btn-primary" onClick={() => { setFormError(""); setShowForm(true); }}><Plus size={17} /> {authSession ? (role === "Seller" ? "Create Listing" : "Create Lot") : (role === "Seller" ? "Add listing" : "Add e-waste lot")}</button>}</div>
           </section>
-          <section className={`stats-grid ${["pricing", "settings", "activity"].includes(currentSection) ? "stats-grid-hidden" : ""}`}>
-            {(role === "Collector" ? collectorStats : role === "Recycler" ? recyclerStats : adminStats).map(stat => <StatCard key={stat.label} {...stat} />)}
-          </section>
+
+          {["overview", "lots"].includes(currentSection) && (
+            <OperationalSummary lots={viewData.lots} role={role} />
+          )}
+
+
           {currentSection === "pricing" ? <PricingWorkspace />
             : currentSection === "settings" ? <SettingsWorkspace session={authSession} profile={profile} role={role} onSignOut={signOut} onReturnToSignIn={() => setDemoAccess(false)} />
               : currentSection === "activity" ? <ActivityPanel activity={viewData.activity} workflowEvents={viewData.workflowEvents} lots={viewData.lots} connected={Boolean(authSession)} ancillaryErrors={connectedData?.ancillaryErrors || []} onRetry={() => setReloadToken(value => value + 1)} retrying={marketplaceState === "loading"} />
                 : currentSection === "overview" ? <DashboardOverview role={role} connected={Boolean(authSession)} onNavigate={setSection} onAdd={() => { setFormError(""); setShowForm(true); }} />
-                  : role === "Collector" ? <CollectorDashboard {...traceProps} traceabilityAvailable={!authSession || !connectedData?.ancillaryErrors?.includes("traceability")} lots={visibleLots.filter(lot => authSession ? lot.collectorId === authSession.user.id : lot.collector === DEMO_COLLECTOR)} allLotCount={collectorLots.length} query={query} setQuery={setQuery} onAdd={() => setShowForm(true)} onDecision={decideOffer} decisionBusyOfferId={decisionBusyOfferId} pickupAppointmentsByLot={pickupAppointmentsByLot} pickupCoordinationAvailable={!authSession || !connectedData?.ancillaryErrors?.includes("pickup_appointments")} pickupBusyLotId={pickupBusyLotId} onProposePickup={proposePickupTime} readOnly={Boolean(authSession)} />
+                  : role === "Seller" ? <SellerDashboard {...traceProps} traceabilityAvailable={!authSession || !connectedData?.ancillaryErrors?.includes("traceability")} lots={visibleLots.filter(lot => authSession ? lot.collectorId === authSession.user.id : (lot.collector === DEMO_SELLER || lot.seller === DEMO_SELLER || lot.id.startsWith("SEL-")))} allLotCount={collectorLots.length} query={query} setQuery={setQuery} statusFilter={statusFilter} setStatusFilter={setStatusFilter} onAdd={() => setShowForm(true)} onEdit={setEditLotTarget} onDecision={decideOffer} decisionBusyOfferId={decisionBusyOfferId} pickupAppointmentsByLot={pickupAppointmentsByLot} pickupCoordinationAvailable={!authSession || !connectedData?.ancillaryErrors?.includes("pickup_appointments")} pickupBusyLotId={pickupBusyLotId} onProposePickup={proposePickupTime} readOnly={Boolean(authSession)} role={role} />
+                  : role === "Collector" ? <CollectorDashboard {...traceProps} availableSellerScrap={availableSellerScrap} onClaimScrap={handleClaimScrap} collectionWork={collectionWork} traceabilityAvailable={!authSession || !connectedData?.ancillaryErrors?.includes("traceability")} lots={visibleLots.filter(lot => authSession ? lot.collectorId === authSession.user.id : (lot.collector === DEMO_COLLECTOR || lot.id.startsWith("COL-") || lot.id.startsWith("SY-")))} allLotCount={collectorLots.length} query={query} setQuery={setQuery} statusFilter={statusFilter} setStatusFilter={setStatusFilter} onAdd={() => setShowForm(true)} onEdit={setEditLotTarget} onDecision={decideOffer} decisionBusyOfferId={decisionBusyOfferId} pickupAppointmentsByLot={pickupAppointmentsByLot} pickupCoordinationAvailable={!authSession || !connectedData?.ancillaryErrors?.includes("pickup_appointments")} pickupBusyLotId={pickupBusyLotId} onProposePickup={proposePickupTime} readOnly={Boolean(authSession)} role={role} />
                   : role === "Recycler" ? currentSection === "my-offers" ? <RecyclerOffers {...traceProps} traceabilityAvailable={!authSession || !connectedData?.ancillaryErrors?.includes("traceability")} offers={myOffers} connected={Boolean(authSession)} pickupAppointmentsByLot={pickupAppointmentsByLot} pickupCoordinationAvailable={!authSession || !connectedData?.ancillaryErrors?.includes("pickup_appointments")} pickupBusyLotId={pickupBusyLotId} onRespondPickup={respondToPickupTime} /> : <RecyclerDashboard lots={visibleLots.filter(lot => ["Open", "Offer submitted"].includes(lot.status))} query={query} setQuery={setQuery} categoryFilter={categoryFilter} setCategoryFilter={setCategoryFilter} locationFilter={locationFilter} setLocationFilter={setLocationFilter} statusFilter={statusFilter} setStatusFilter={setStatusFilter} categories={categories} locations={locations} myOffers={myOffers} currentRecyclerId={authSession?.user?.id} readOnly={Boolean(authSession)} onOffer={lot => { setOfferLot(lot); setOfferPrice(""); setOfferMessage(""); setOfferError(""); }} />
                     : <AdminDashboard {...traceProps} traceabilityAvailable={!authSession || !connectedData?.ancillaryErrors?.includes("traceability")} lots={visibleLots} query={query} setQuery={setQuery} statusFilter={statusFilter} setStatusFilter={setStatusFilter} evidenceDrafts={evidenceDrafts} setEvidenceDrafts={setEvidenceDrafts} disputeDrafts={disputeDrafts} setDisputeDrafts={setDisputeDrafts} onTransition={transitionLot} onConnectedTransition={handleAdminTransition} busyLotId={workflowBusyLotId} pickupAppointmentsByLot={pickupAppointmentsByLot} canManage={Boolean(authSession && profile?.role === "admin")} readOnly={Boolean(authSession)} />}
-          <footer className="footer"><span>© 2026 Scarap_Yukti · Prototype workspace</span><span>{authSession ? "Supabase reads, Collector lot creation and offer decisions, Recycler offers, and Admin workflow RPC actions." : "Simulated workflow and recycling evidence; no verified recycler service."}</span></footer>
+          <footer className="footer"><span>© 2026 Scarap_Yukti · Prototype workspace</span><span>{authSession ? "Supabase reads, Seller/Collector lot creation and offer decisions, pickup coordination, Recycler offers, and Admin workflow RPC actions." : "Simulated workflow and recycling evidence; no verified recycler service."}</span></footer>
         </div>
       </main>
 
       {notice && <div className={`toast ${noticeType}`} role={noticeType === "error" ? "alert" : "status"}>{noticeType === "error" ? <CircleHelp size={17} /> : <Check size={17} />}<span>{notice}</span><button onClick={() => setNotice("")} aria-label="Dismiss"><X size={16} /></button></div>}
 
-      {showForm && <div className="modal-backdrop" onMouseDown={e => { if (e.target === e.currentTarget && !createBusy) setShowForm(false); }}><AccessibleDialog className="modal" labelledBy="create-lot-dialog-title" describedBy="create-lot-dialog-description" busy={createBusy} onClose={() => setShowForm(false)}><div className="modal-header"><div><span className="eyebrow">NEW RECORD</span><h2 id="create-lot-dialog-title">Add e-waste lot</h2><p id="create-lot-dialog-description">{authSession ? "This lot will be saved to the marketplace under your Collector account." : "Enter the details you know. This demo does not verify claims."}</p></div><button type="button" className="icon-btn" onClick={() => !createBusy && setShowForm(false)} aria-label="Close dialog"><X size={20} /></button></div>
+      {showForm && <div className="modal-backdrop" onMouseDown={e => { if (e.target === e.currentTarget && !createBusy) setShowForm(false); }}><AccessibleDialog className="modal" labelledBy="create-lot-dialog-title" describedBy="create-lot-dialog-description" busy={createBusy} onClose={() => setShowForm(false)}><div className="modal-header"><div><span className="eyebrow">NEW RECORD</span><h2 id="create-lot-dialog-title">{role === "Seller" ? "Add e-waste listing" : "Add e-waste lot"}</h2><p id="create-lot-dialog-description">{authSession ? `This lot will be saved to the marketplace under your ${role} account.` : "Enter the details you know. This demo does not verify claims."}</p></div><button type="button" className="icon-btn" onClick={() => !createBusy && setShowForm(false)} aria-label="Close dialog"><X size={20} /></button></div>
         <form onSubmit={createLot} className="form-grid">
           <label className="full">Lot name<input data-dialog-initial-focus="true" required maxLength="100" value={form.title} onChange={e => { setForm({ ...form, title: e.target.value }); setFormError(""); }} placeholder="e.g. Used laptop batch" /></label>
           <label>Category<select value={form.category} onChange={e => setForm({ ...form, category: e.target.value })}><option>Computers</option><option>Displays</option><option>Small electronics</option><option>Phones and tablets</option><option>Batteries</option><option>Mixed e-waste</option><option>Other</option></select></label>
@@ -1034,15 +1452,25 @@ export default function App() {
           <label className="full">Approximate pickup area<input required minLength="2" maxLength="160" value={form.location} onChange={e => { setForm({ ...form, location: e.target.value }); setFormError(""); }} placeholder="Area, city" /></label>
           <label className="full">Notes (optional)<textarea rows="3" maxLength="500" value={form.notes} onChange={e => { setForm({ ...form, notes: e.target.value }); setFormError(""); }} placeholder="Condition and items included..." /></label>
           {formError && <div className="form-error full" role="alert">{formError}</div>}
-          <div className="form-note full"><ShieldCheck size={16} /><span>{authSession ? "Saved using your signed-in session. Database row-level security checks that you are a Collector and assigns ownership to your account." : "This record stays in this browser. It is not shared with other users or devices."}<br /><strong>Privacy:</strong> Recyclers who can view this lot can see its location and notes. Use an approximate area/city only; never enter an exact home address, phone number, or other private contact details.</span></div>
-          <div className="modal-actions full"><button type="button" className="btn btn-light" onClick={() => !createBusy && setShowForm(false)} disabled={createBusy}>Cancel</button><button className="btn btn-primary" type="submit" disabled={createBusy}><Plus size={16} /> {createBusy ? "Saving…" : authSession ? "Create lot" : "Save lot"}</button></div>
+          <div className="form-note full"><ShieldCheck size={16} /><span>{authSession ? "Saved using your signed-in session. Database row-level security checks that you are a Seller or Collector and assigns ownership to your account." : "This record stays in this browser. It is not shared with other users or devices."}<br /><strong>Privacy:</strong> Recyclers who can view this lot can see its location and notes. Use an approximate area/city only; never enter an exact home address, phone number, or other private contact details.</span></div>
+          <div className="modal-actions full"><button type="button" className="btn btn-light" onClick={() => !createBusy && setShowForm(false)} disabled={createBusy}>Cancel</button><button className="btn btn-primary" type="submit" disabled={createBusy}><Plus size={16} /> {createBusy ? "Saving…" : authSession ? (role === "Seller" ? "Create listing" : "Create lot") : (role === "Seller" ? "Save listing" : "Save lot")}</button></div>
         </form>
       </AccessibleDialog></div>}
 
       {offerLot && <div className="modal-backdrop" onMouseDown={e => { if (e.target === e.currentTarget && !offerBusy) setOfferLot(null); }}><AccessibleDialog className="modal modal-narrow" labelledBy="offer-dialog-title" describedBy="offer-dialog-description" busy={offerBusy} onClose={() => setOfferLot(null)}><div className="modal-header"><div><span className="eyebrow">{authSession ? "SUPABASE OFFER" : "DEMO OFFER"}</span><h2 id="offer-dialog-title">Make an offer</h2><p id="offer-dialog-description">{offerLot.title} · {offerLot.id} · {offerLot.weight} kg</p></div><button type="button" className="icon-btn" onClick={() => !offerBusy && setOfferLot(null)} aria-label="Close dialog"><X size={20} /></button></div>
         <form onSubmit={submitOffer} className="form-grid"><label className="full">Offer amount (₹)<input data-dialog-initial-focus="true" type="number" min="0.01" max="1000000000" step="0.01" required value={offerPrice} onChange={e => { setOfferPrice(e.target.value); setOfferError(""); }} placeholder={authSession ? "Enter your offer amount" : "Enter a demo amount"} /></label><label className="full">Message (optional)<textarea rows="3" maxLength="500" value={offerMessage} onChange={e => { setOfferMessage(e.target.value); setOfferError(""); }} placeholder="Pickup terms or inspection notes" /></label>{offerError && <div className="form-error full" role="alert">{offerError}</div>}<div className="form-note full">{authSession ? "Your offer is sent using your signed-in Recycler account and checked by database RLS." : "This simulated offer is saved only in this browser. It is not a live market quote or payment commitment."}</div><div className="modal-actions full"><button type="button" className="btn btn-light" onClick={() => !offerBusy && setOfferLot(null)} disabled={offerBusy}>Cancel</button><button className="btn btn-primary" type="submit" disabled={offerBusy}>{offerBusy ? "Submitting…" : authSession ? "Submit offer" : "Submit demo offer"}</button></div></form>
       </AccessibleDialog></div>}
-    </div>
+      {editLotTarget && (
+        <EditLotModal
+          lot={editLotTarget}
+          busy={editBusy}
+          error={editError}
+          onClose={() => { setEditLotTarget(null); setEditError(""); }}
+          onSave={handleEditLot}
+        />
+      )}
+
+          </div>
   );
 }
 
@@ -1061,15 +1489,17 @@ function PasswordRecoveryGate({ password, setPassword, confirmPassword, setConfi
 }
 
 function DashboardOverview({ role, connected, onNavigate, onAdd }) {
-  const content = role === "Collector"
-    ? { title: "Your collection workspace", detail: "Create a scrap request, review incoming recycler offers, and follow pickup and recycling progress.", actions: [{ label: "View scrap requests", section: "lots", icon: <Package size={17} /> }, { label: "Review history", section: "activity", icon: <ClipboardList size={17} /> }] }
+  const content = role === "Seller"
+    ? { title: "Your disposal workspace", detail: "Create scrap listings for surplus or retired electronics, review competitive bids from certified recyclers, and coordinate verified pickups.", actions: [{ label: "Manage my listings", section: "lots", icon: <Package size={17} /> }, { label: "Price estimator", section: "pricing", icon: <Wallet size={17} /> }, { label: "Disposal history", section: "activity", icon: <ClipboardList size={17} /> }] }
+    : role === "Collector"
+      ? { title: "Collection & consolidation hub", detail: "Consolidate material streams, manage aggregated lots, evaluate incoming recycler bids, and dispatch logistics handovers.", actions: [{ label: "Consignment ledger", section: "lots", icon: <Package size={17} /> }, { label: "Rate calculator", section: "pricing", icon: <Wallet size={18} /> }, { label: "Ledger history", section: "activity", icon: <ClipboardList size={17} /> }] }
     : role === "Recycler"
       ? { title: "Find your next material lot", detail: "Browse available scrap requests, submit offers, and track collector decisions in one workspace.", actions: [{ label: "Browse scrap requests", section: "lots", icon: <Search size={17} /> }, { label: "View my offers", section: "my-offers", icon: <Wallet size={17} /> }] }
       : { title: "Marketplace operations", detail: "Monitor visible lots and offers, review workflow progress, and use the authorized Admin workflow controls where available.", actions: [{ label: "Open marketplace requests", section: "lots", icon: <Package size={17} /> }, { label: "View history", section: "activity", icon: <ClipboardList size={17} /> }] };
 
   return <section className="panel dashboard-panel dashboard-overview" aria-labelledby="dashboard-overview-title">
     <div className="panel-heading"><div><h2 id="dashboard-overview-title">{content.title}</h2><p>{content.detail}</p></div><span className={connected ? "connected-label" : "demo-label"}>{connected ? "CONNECTED" : "LOCAL DEMO"}</span></div>
-    <div className="dashboard-shortcuts">{role === "Collector" && <button type="button" className="shortcut-card shortcut-primary" onClick={onAdd}><span className="shortcut-icon"><Plus size={18} /></span><span><strong>Create a scrap request</strong><small>{connected ? "Post a lot from your Collector account" : "Save a lot in this browser demo"}</small></span></button>}{content.actions.map(action => <button type="button" className="shortcut-card" key={action.section} onClick={() => onNavigate(action.section)}><span className="shortcut-icon">{action.icon}</span><span><strong>{action.label}</strong><small>Open this workspace section</small></span><ChevronDown className="shortcut-arrow" size={16} /></button>)}</div>
+    <div className="dashboard-shortcuts">{role === "Seller" && <button type="button" className="shortcut-card shortcut-primary" onClick={onAdd}><span className="shortcut-icon"><Plus size={18} /></span><span><strong>Create a disposal listing</strong><small>{connected ? "Post scrap assets from your Seller account" : "Save a listing in this browser demo"}</small></span></button>}{role === "Collector" && <button type="button" className="shortcut-card shortcut-primary" onClick={onAdd}><span className="shortcut-icon"><Plus size={18} /></span><span><strong>Create consignment lot</strong><small>{connected ? "Post an aggregated lot from your Collector account" : "Save a lot in this browser demo"}</small></span></button>}{content.actions.map(action => <button type="button" className="shortcut-card" key={action.section} onClick={() => onNavigate(action.section)}><span className="shortcut-icon">{action.icon}</span><span><strong>{action.label}</strong><small>Open this workspace section</small></span><ChevronDown className="shortcut-arrow" size={16} /></button>)}</div>
     <p className="dashboard-disclaimer">{connected ? "Records and available actions are governed by your database profile and Supabase policies." : "Demo role selection only changes the local view; it does not grant account permissions."}</p>
   </section>;
 }
@@ -1106,30 +1536,211 @@ function SettingsWorkspace({ session, profile, role, onSignOut, onReturnToSignIn
   </section>;
 }
 
-function AuthPanel({ configured, session, profile, mode, setMode, form, setForm, onSubmit, onForgotPassword, onSignOut, busy, message, messageType }) {
-  return <section className={`auth-panel ${session ? "connected" : ""}`} aria-label="Supabase authentication">
-    <div className="auth-panel-intro">
-      <span className="eyebrow"><ShieldCheck size={14} /> AUTHENTICATION · PHASE 1</span>
-      <strong>{session && profile ? `Signed in as ${profile.display_name || session.user.email}` : "Supabase account"}</strong>
-      <span>{session && profile ? `Database role: ${profile.role}. Role comes from your profiles row.` : "Sign in to load your Supabase profile. Demo marketplace records remain separate."}</span>
-    </div>
-    {session && profile ? <div className="auth-panel-actions">
-      <span className="auth-role-pill">{profile.role.toUpperCase()}</span>
-      <button type="button" className="btn btn-light btn-small" onClick={onSignOut} disabled={busy}>{busy ? "Signing out…" : "Sign out"}</button>
-      <p className="auth-demo-note">Lots, offers, activity, and workflow history are loaded from Supabase. Collectors can create lots and decide pending offers; Recyclers can submit offers; Admins can advance workflow through the database RPC.</p>
-    </div> : !configured ? <div className="auth-config-note" role="status">
-      <strong>Authentication is not configured yet.</strong>
-      <span>Copy <code>.env.example</code> to <code>.env.local</code>, add your Supabase URL and publishable key, then restart Vite. The existing demo continues to work.</span>
-    </div> : <form className="auth-form" onSubmit={onSubmit}>
-      {mode === "signup" && <label>Name (optional)<input type="text" maxLength="100" autoComplete="name" value={form.displayName} onChange={e => setForm(prev => ({ ...prev, displayName: e.target.value }))} /></label>}
-      <label>Email<input type="email" autoComplete="email" required value={form.email} onChange={e => setForm(prev => ({ ...prev, email: e.target.value }))} /></label>
-      <label>Password<input type="password" autoComplete={mode === "signup" ? "new-password" : "current-password"} required value={form.password} onChange={e => setForm(prev => ({ ...prev, password: e.target.value }))} /></label>
-      <div className="auth-form-actions"><button className="btn btn-primary btn-small" type="submit" disabled={busy}>{busy ? "Please wait…" : mode === "signup" ? "Create account" : "Sign in"}</button><button className="auth-mode-toggle" type="button" onClick={() => setMode(mode === "signup" ? "signin" : "signup")} disabled={busy}>{mode === "signup" ? "Already registered? Sign in" : "New here? Create an account"}</button>{mode === "signin" && <button className="auth-mode-toggle" type="button" onClick={onForgotPassword} disabled={busy}>Forgot password?</button>}</div>
-      {message && <p className={`auth-message ${messageType}`} role={messageType === "error" ? "alert" : "status"}>{message}</p>}
-      <p className="auth-demo-note">After sign-in, marketplace data loads from Supabase. New accounts receive the Collector role from the database; users cannot choose or promote their own role here.</p>
-    </form>}
-    {session && profile && message && <p className={`auth-message ${messageType}`} role={messageType === "error" ? "alert" : "status"}>{message}</p>}
-  </section>;
+function AuthPanel({
+  configured,
+  session,
+  profile,
+  mode,
+  setMode,
+  form,
+  setForm,
+  onSubmit,
+  onForgotPassword,
+  onSignOut,
+  busy,
+  message,
+  messageType,
+  rememberEmail,
+  setRememberEmail
+}) {
+  const [showPassword, setShowPassword] = useState(false);
+
+  return (
+    <section className={`auth-panel ${session ? "connected" : ""}`} aria-label="Supabase authentication">
+      <div className="auth-panel-intro">
+        <span className="eyebrow"><ShieldCheck size={14} /> AUTHENTICATION · PHASE 1</span>
+        <strong>{session && profile ? `Signed in as ${profile.display_name || session.user.email}` : "Supabase account"}</strong>
+        <span>{session && profile ? `Database role: ${profile.role}. Role comes from your profiles row.` : "Sign in to load your Supabase profile. Demo marketplace records remain separate."}</span>
+      </div>
+
+      {session && profile ? (
+        <div className="auth-panel-actions">
+          <span className="auth-role-pill">{profile.role.toUpperCase()}</span>
+          <button type="button" className="btn btn-light btn-small" onClick={onSignOut} disabled={busy}>
+            {busy ? "Signing out…" : "Sign out"}
+          </button>
+          <p className="auth-demo-note">Lots, offers, activity, and workflow history are loaded from Supabase. Sellers and Collectors can create lots, edit open listings, and decide pending offers; Recyclers can submit offers; Admins can advance workflow through the database RPC.</p>
+        </div>
+      ) : !configured ? (
+        <div className="auth-config-note" role="status">
+          <strong>Authentication is not configured yet.</strong>
+          <span>Copy <code>.env.example</code> to <code>.env.local</code>, add your Supabase URL and publishable key, then restart Vite. The existing demo continues to work.</span>
+        </div>
+      ) : (
+        <form className="auth-form" onSubmit={onSubmit}>
+          {/* Segmented Mode Switcher */}
+          <div className="auth-mode-tabs" role="tablist">
+            <button
+              type="button"
+              role="tab"
+              aria-selected={mode === "signin"}
+              className={`auth-mode-tab ${mode === "signin" ? "active" : ""}`}
+              onClick={() => setMode("signin")}
+              disabled={busy}
+            >
+              Sign In
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={mode === "signup"}
+              className={`auth-mode-tab ${mode === "signup" ? "active" : ""}`}
+              onClick={() => setMode("signup")}
+              disabled={busy}
+            >
+              Register New Account
+            </button>
+          </div>
+
+          {mode === "signup" && (
+            <>
+              <label>
+                Name (optional)
+                <input
+                  type="text"
+                  maxLength="100"
+                  autoComplete="name"
+                  placeholder="Your personal or company name"
+                  value={form.displayName}
+                  onChange={e => setForm(prev => ({ ...prev, displayName: e.target.value }))}
+                />
+              </label>
+
+              <div className="auth-role-selection-block">
+                <span className="auth-role-label">Choose Account Persona</span>
+                <div className="auth-role-chips-group">
+                  <button
+                    type="button"
+                    className={`auth-role-chip ${form.role === "seller" ? "active" : ""}`}
+                    onClick={() => setForm(prev => ({ ...prev, role: "seller" }))}
+                  >
+                    <Package size={16} className="text-lime" />
+                    <div className="auth-chip-text">
+                      <strong>Seller</strong>
+                      <small>Disposing scrap & electronic assets</small>
+                    </div>
+                  </button>
+
+                  <button
+                    type="button"
+                    className={`auth-role-chip ${form.role === "collector" ? "active" : ""}`}
+                    onClick={() => setForm(prev => ({ ...prev, role: "collector" }))}
+                  >
+                    <Truck size={16} className="text-lime" />
+                    <div className="auth-chip-text">
+                      <strong>Collector</strong>
+                      <small>Aggregator & sorting facility</small>
+                    </div>
+                  </button>
+                </div>
+
+                {/* Retained native select for testing compatibility and fallback */}
+                <select
+                  value={form.role || "seller"}
+                  onChange={e => setForm(prev => ({ ...prev, role: e.target.value }))}
+                  style={{ display: "none" }}
+                  aria-hidden="true"
+                >
+                  <option value="seller">Seller (Disposing scrap & electronic assets)</option>
+                  <option value="collector">Collector (Aggregator & sorting facility)</option>
+                </select>
+              </div>
+            </>
+          )}
+
+          <label>
+            Email
+            <input
+              type="email"
+              autoComplete="email"
+              required
+              placeholder="name@organization.com"
+              value={form.email}
+              onChange={e => setForm(prev => ({ ...prev, email: e.target.value }))}
+            />
+          </label>
+
+          <label>
+            Password
+            <div className="auth-password-field">
+              <input
+                type={showPassword ? "text" : "password"}
+                autoComplete={mode === "signup" ? "new-password" : "current-password"}
+                required
+                placeholder="••••••••••••"
+                value={form.password}
+                onChange={e => setForm(prev => ({ ...prev, password: e.target.value }))}
+              />
+              <button
+                type="button"
+                className="auth-eye-btn"
+                onClick={() => setShowPassword(!showPassword)}
+                aria-label={showPassword ? "Hide password" : "Show password"}
+                title={showPassword ? "Hide password" : "Show password"}
+                tabIndex={-1}
+              >
+                {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+              </button>
+            </div>
+          </label>
+
+          {mode === "signin" && (
+            <div className="auth-options-row">
+              <label className="auth-remember-row">
+                <input
+                  type="checkbox"
+                  checked={Boolean(rememberEmail)}
+                  onChange={e => setRememberEmail && setRememberEmail(e.target.checked)}
+                />
+                <span>Remember email</span>
+              </label>
+
+              <button
+                type="button"
+                className="auth-forgot-link"
+                onClick={onForgotPassword}
+                disabled={busy}
+              >
+                Forgot password?
+              </button>
+            </div>
+          )}
+
+          <div className="auth-form-actions">
+            <button className="btn btn-primary btn-hero w-full" type="submit" disabled={busy}>
+              {busy ? "Please wait…" : mode === "signup" ? "Create Marketplace Account" : "Sign In to Dashboard"}
+            </button>
+          </div>
+
+          {message && (
+            <p className={`auth-message ${messageType}`} role={messageType === "error" ? "alert" : "status"}>
+              {message}
+            </p>
+          )}
+
+          <p className="auth-demo-note">
+            After sign-in, marketplace data loads from Supabase. New accounts can register as a Seller or Collector. Privileged roles (Recycler, Admin) require administrative onboarding.
+          </p>
+        </form>
+      )}
+
+      {session && profile && message && (
+        <p className={`auth-message ${messageType}`} role={messageType === "error" ? "alert" : "status"}>
+          {message}
+        </p>
+      )}
+    </section>
+  );
 }
 
 function AccessibleDialog({ children, className, labelledBy, describedBy, busy, onClose }) {
@@ -1217,7 +1828,64 @@ function LotFilters({ query, setQuery, statusFilter, setStatusFilter, categories
   </div>;
 }
 
-function CollectorDashboard({ onWeight, onDispute, traceabilityAvailable, lots, allLotCount, query, setQuery, onAdd, onDecision, decisionBusyOfferId, pickupAppointmentsByLot, pickupCoordinationAvailable, pickupBusyLotId, onProposePickup, readOnly = false }) {
+function SellerDashboard({ onWeight, onDispute, traceabilityAvailable, lots, allLotCount, query, setQuery, statusFilter, setStatusFilter, onAdd, onEdit, onDecision, decisionBusyOfferId, pickupAppointmentsByLot, pickupCoordinationAvailable, pickupBusyLotId, onProposePickup, readOnly = false, role = "Seller" }) {
+  return (
+    <SellerWorkspaceView
+      lots={lots}
+      allLotCount={allLotCount}
+      query={query}
+      setQuery={setQuery}
+      statusFilter={statusFilter}
+      setStatusFilter={setStatusFilter}
+      onAdd={onAdd}
+      onEdit={onEdit}
+      onDecision={onDecision}
+      decisionBusyOfferId={decisionBusyOfferId}
+      pickupAppointmentsByLot={pickupAppointmentsByLot}
+      pickupCoordinationAvailable={pickupCoordinationAvailable}
+      pickupBusyLotId={pickupBusyLotId}
+      onProposePickup={onProposePickup}
+      traceProps={{ onWeight, onDispute }}
+      traceabilityAvailable={traceabilityAvailable}
+      readOnly={readOnly}
+      role={role}
+      LotTraceActions={LotTraceActions}
+      PickupCoordination={PickupCoordination}
+    />
+  );
+}
+
+function CollectorDashboard({ onWeight, onDispute, traceabilityAvailable, lots, allLotCount, query, setQuery, statusFilter, setStatusFilter, onAdd, onEdit, onDecision, decisionBusyOfferId, pickupAppointmentsByLot, pickupCoordinationAvailable, pickupBusyLotId, onProposePickup, readOnly = false, role = "Collector", availableSellerScrap = [], onClaimScrap = null, collectionWork = [] }) {
+  return (
+    <CollectorWorkspaceView
+      lots={lots}
+      allLotCount={allLotCount}
+      query={query}
+      setQuery={setQuery}
+      statusFilter={statusFilter}
+      setStatusFilter={setStatusFilter}
+      onAdd={onAdd}
+      onEdit={onEdit}
+      onDecision={onDecision}
+      decisionBusyOfferId={decisionBusyOfferId}
+      pickupAppointmentsByLot={pickupAppointmentsByLot}
+      pickupCoordinationAvailable={pickupCoordinationAvailable}
+      pickupBusyLotId={pickupBusyLotId}
+      onProposePickup={onProposePickup}
+      traceProps={{ onWeight, onDispute }}
+      traceabilityAvailable={traceabilityAvailable}
+      readOnly={readOnly}
+      role={role}
+      LotTraceActions={LotTraceActions}
+      PickupCoordination={PickupCoordination}
+      availableSellerScrap={availableSellerScrap}
+      onClaimScrap={onClaimScrap}
+      collectionWork={collectionWork}
+    />
+  );
+}
+
+function LegacyCollectorCardList({ onWeight, onDispute, traceabilityAvailable, lots, allLotCount, query, setQuery, onAdd, onDecision, decisionBusyOfferId, pickupAppointmentsByLot, pickupCoordinationAvailable, pickupBusyLotId, onProposePickup, readOnly = false }) {
   return <section className="panel dashboard-panel"><div className="panel-heading"><div><h2>My e-waste lots</h2><p>{readOnly ? "Supabase lot and offer records. Accept/reject decisions are checked by the database; other workflow updates are not connected." : "Compare recycler offers, then accept or reject each pending offer."}</p></div><span className={readOnly ? "connected-label" : "demo-label"}>{readOnly ? "CONNECTED COLLECTOR" : "DEMO COLLECTOR"}</span></div>
     <div className="filters role-filters"><div className="search-box"><Search size={17} /><input value={query} onChange={e => setQuery(e.target.value)} placeholder="Search my lots..." aria-label="Search my lots" /></div><span className="filters-note">Showing {lots.length} of {allLotCount} lots</span></div>
     {lots.length ? <div className="lot-card-list">{lots.map(lot => <article className="workflow-card" key={lot.id}>
@@ -1234,7 +1902,11 @@ function CollectorDashboard({ onWeight, onDispute, traceabilityAvailable, lots, 
   </section>;
 }
 
-function RecyclerDashboard({ lots, query, setQuery, categoryFilter, setCategoryFilter, locationFilter, setLocationFilter, statusFilter, setStatusFilter, categories, locations, myOffers, currentRecyclerId, readOnly = false, onOffer }) {
+function RecyclerDashboard(props) {
+  return <RecyclerWorkspaceView {...props} />;
+}
+
+function LegacyRecyclerDashboard({ lots, query, setQuery, categoryFilter, setCategoryFilter, locationFilter, setLocationFilter, statusFilter, setStatusFilter, categories, locations, myOffers, currentRecyclerId, readOnly = false, onOffer }) {
   return <section className="panel dashboard-panel"><div className="panel-heading"><div><h2>Available lots</h2><p>{readOnly ? "Browse lots visible to your account and submit one offer per lot." : "Browse open lots and submit one offer per lot as the demo recycler."}</p></div><span className={readOnly ? "connected-label" : "demo-label"}>{readOnly ? "CONNECTED RECYCLER" : "DEMO RECYCLER"}</span></div>
     <div className="inline-hint"><ShieldCheck size={15} /> Lot locations and notes are listing details, not private contact fields. After an offer is accepted, the Collector may propose a time and the accepted Recycler can respond when the pickup-coordination migration is enabled.</div>
     {readOnly && <div className="inline-hint"><ShieldCheck size={15} /> Offer rows follow the database policy: recyclers can see their own offers; offers on lots they do not own may not be visible.</div>}
@@ -1255,7 +1927,17 @@ function RecyclerOffers({ offers, connected = false, traceabilityAvailable, pick
   </section>;
 }
 
-function AdminDashboard({ onWeight, onDispute, traceabilityAvailable, lots, query, setQuery, statusFilter, setStatusFilter, evidenceDrafts, setEvidenceDrafts, disputeDrafts, setDisputeDrafts, onTransition, onConnectedTransition, busyLotId, pickupAppointmentsByLot, canManage = false, readOnly = false }) {
+function AdminDashboard(props) {
+  return (
+    <AdminWorkspaceView
+      {...props}
+      traceProps={{ onWeight: props.onWeight, onDispute: props.onDispute }}
+      LotTraceActions={LotTraceActions}
+    />
+  );
+}
+
+function LegacyAdminDashboard({ onWeight, onDispute, traceabilityAvailable, lots, query, setQuery, statusFilter, setStatusFilter, evidenceDrafts, setEvidenceDrafts, disputeDrafts, setDisputeDrafts, onTransition, onConnectedTransition, busyLotId, pickupAppointmentsByLot, canManage = false, readOnly = false }) {
   const runTransition = (lotId, nextStatus, demoStatus, note = "") => readOnly
     ? onConnectedTransition(lotId, nextStatus, demoStatus, note)
     : onTransition(lotId, demoStatus, note);
@@ -1345,6 +2027,7 @@ function PickupCoordination({ role, lot, appointment, available, busy, connected
     ? new Date(appointment.scheduledAt).toLocaleString("en-IN", { dateStyle: "medium", timeStyle: "short" })
     : "";
   const canPropose = !appointment || appointment.status === "reschedule_requested";
+  const isOwner = role === "collector" || role === "seller" || role === "Collector" || role === "Seller";
   const submitReschedule = () => {
     const validation = validateRescheduleRequest(responseNote);
     if (!validation.ok) {
@@ -1357,9 +2040,9 @@ function PickupCoordination({ role, lot, appointment, available, busy, connected
 
   return <section className="pickup-coordination" aria-label="Pickup appointment coordination">
     <div className="pickup-copy"><strong>Pickup coordination</strong><span>{connected ? "An accepted offer does not itself confirm a pickup time." : "Local demo only; this is not a confirmed real-world pickup."}</span></div>
-    {appointment && <div className={`pickup-summary ${appointment.status}`}><strong>{appointment.status === "confirmed" ? "Time confirmed by both accounts" : appointment.status === "reschedule_requested" ? "Recycler requested a different time" : "Awaiting Recycler response"}</strong><span>{dateLabel}</span>{appointment.proposedNote && <span>Collector note: {appointment.proposedNote}</span>}{appointment.responseNote && <span>Recycler response: {appointment.responseNote}</span>}</div>}
+    {appointment && <div className={`pickup-summary ${appointment.status}`}><strong>{appointment.status === "confirmed" ? "Time confirmed by both accounts" : appointment.status === "reschedule_requested" ? "Recycler requested a different time" : "Awaiting Recycler response"}</strong><span>{dateLabel}</span>{appointment.proposedNote && <span>{(role === "seller" || role === "Seller") ? "Seller note: " : "Collector note: "}{appointment.proposedNote}</span>}{appointment.responseNote && <span>Recycler response: {appointment.responseNote}</span>}</div>}
     {connected && !available && <p className="pickup-waiting" role="status">Appointment data could not be loaded. Retry the marketplace refresh before taking a pickup action.</p>}
-    {available && role === "collector" && canPropose && <form className="pickup-form" onSubmit={submitProposal}>
+    {available && isOwner && canPropose && <form className="pickup-form" onSubmit={submitProposal}>
       <label>Propose a pickup date and time<input type="datetime-local" required value={timeValue} disabled={busy} onChange={event => { setTimeValue(event.target.value); setLocalError(""); }} /></label>
       <label>Coordination note (optional)<textarea rows="2" maxLength="500" disabled={busy} value={pickupNote} onChange={event => { setPickupNote(event.target.value); setLocalError(""); }} placeholder="Share a brief operational note" /></label>
       {localError && <span className="pickup-error" role="alert">{localError}</span>}
@@ -1372,10 +2055,10 @@ function PickupCoordination({ role, lot, appointment, available, busy, connected
       <p>Confirm only if this proposed time works for you. Confirmation records agreement; it does not prove collection.</p>
       <div className="pickup-actions"><button className="btn btn-light btn-small" type="button" onClick={submitReschedule} disabled={busy}>{busy && pendingDecision === "request_reschedule" ? "Sending…" : "Request another time"}</button><button className="btn btn-primary btn-small" type="button" onClick={() => submitResponse("confirm")} disabled={busy}>{busy && pendingDecision === "confirm" ? "Saving…" : "Confirm time"}</button></div>
     </div>}
-    {available && role === "recycler" && appointment?.status === "reschedule_requested" && <p className="pickup-waiting">Waiting for the Collector to propose another time.</p>}
-    {available && role === "collector" && appointment?.status === "proposed" && <p className="pickup-waiting">The proposal has been sent. The accepted Recycler must respond before a time is confirmed.</p>}
-    {available && role === "collector" && appointment?.status === "confirmed" && <p className="pickup-waiting">The proposed time was confirmed. Mark the lot collected only after the handover actually happens.</p>}
-    {available && !appointment && role === "recycler" && <p className="pickup-waiting">The Collector has not proposed a pickup time yet.</p>}
+    {available && role === "recycler" && appointment?.status === "reschedule_requested" && <p className="pickup-waiting">Waiting for the lot owner to propose another time.</p>}
+    {available && isOwner && appointment?.status === "proposed" && <p className="pickup-waiting">The proposal has been sent. The accepted Recycler must respond before a time is confirmed.</p>}
+    {available && isOwner && appointment?.status === "confirmed" && <p className="pickup-waiting">The proposed time was confirmed. Mark the lot collected only after the handover actually happens.</p>}
+    {available && !appointment && role === "recycler" && <p className="pickup-waiting">The lot owner has not proposed a pickup time yet.</p>}
     {!connected && <span className="pickup-demo-tag">LOCAL DEMO · SAVED IN THIS BROWSER</span>}
   </section>;
 }

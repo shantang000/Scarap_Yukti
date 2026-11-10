@@ -37,8 +37,10 @@ test("weight cannot be recorded twice and Admin monitoring never exposes partici
 test("disputes are offered only in the migration's participant-allowed statuses", () => {
   for (const status of ["Pickup scheduled", "Collected", "Recycling review"]) {
     assert.equal(getTraceabilityActionState({ status }, "collector", true).canDispute, true);
+    assert.equal(getTraceabilityActionState({ status }, "seller", true).canDispute, true);
   }
   for (const status of ["Open", "Offer submitted", "Recycled", "Disputed"]) {
     assert.equal(getTraceabilityActionState({ status }, "collector", true).canDispute, false);
+    assert.equal(getTraceabilityActionState({ status }, "seller", true).canDispute, false);
   }
 });

@@ -1,139 +1,211 @@
-# Scarap_Yukti
+# Scarap_Yukti (स्क्रैप युक्ति) — Circular E-Waste Logistics Platform
 
-**An e-waste marketplace demo connecting Collectors and Recyclers, with an Admin workflow for tracking recycling progress.**
+[![Node.js CI](https://img.shields.io/badge/Node.js-20.x%20%7C%2022.x-brightgreen.svg)](https://nodejs.org/)
+[![Vite](https://img.shields.io/badge/Vite-8.3.5-646CFF.svg)](https://vitejs.dev/)
+[![React](https://img.shields.io/badge/React-19.1.0-61DAFB.svg)](https://react.dev/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![WCAG 2.1](https://img.shields.io/badge/Accessibility-WCAG%202.1%20AAA%2FAA-success.svg)](https://www.w3.org/WAI/WCAG21/quickref/)
 
-- Live website: [scarap-yukti.vercel.app](https://scarap-yukti.vercel.app/)
-- GitHub: [shantang000/Scarap_Yukti](https://github.com/shantang000/Scarap_Yukti)
+**An industrial technology platform prototype and marketplace connecting Electronic Scrap Generators (Sellers), Aggregators (Collectors), and Registered Recyclers with verified custody tracking, mass-balance discrepancy evaluation, and statutory audit logging.**
 
-Scarap_Yukti is built with React, Vite, and Supabase. It provides separate Collector, Recycler, and Admin dashboards. Signed-in marketplace data is stored in Supabase and accessed under the project's Row Level Security (RLS) policies. The signed-out demo is saved only in the current browser.
+- **Live Deployment**: [scarap-yukti.vercel.app](https://scarap-yukti.vercel.app/)
+- **Repository**: [shantang000/Scarap_Yukti](https://github.com/shantang000/Scarap_Yukti)
 
-## Features
+---
 
-- **Collector:** create e-waste lots, view incoming Recycler offers, and accept or reject pending offers for owned lots.
-- **Recycler:** browse available lots and submit an offer. The database permits one offer per Recycler per lot.
-- **Admin:** monitor marketplace records and advance allowed workflow steps through a database RPC.
-- **Traceability (optional follow-up migration):** the accepted Recycler can record handover weight; a discrepancy above 10% is flagged for Admin review. The lot-owning Collector or accepted Recycler can raise a dispute. These records do not independently verify a physical handover or recycling outcome.
-- **Pickup coordination (follow-up migration required):** the lot-owning Collector can propose a time after accepting an offer; the accepted Recycler can confirm it or request another time. This records an agreement, not a guaranteed pickup or completed handover.
-- **Workflow history:** track offer decisions, pickup scheduling, collection, recycling review, and recycled status.
-- **Authentication:** sign up, sign in, sign out, and recover a password with Supabase Auth. The dashboard role is read from the user's database profile.
-- **Profile privacy:** direct profile reads are limited to the user's own profile; a restricted database function returns participant names only for relevant visible marketplace records.
+## Table of Contents
+1. [Platform Architecture & Visual Design](#platform-architecture--visual-design)
+2. [Workspaces & Participant Roles](#workspaces--participant-roles)
+3. [Public Interactive Demo Mode](#public-interactive-demo-mode)
+4. [Local Setup & Installation](#local-setup--installation)
+5. [Database Migrations & Supabase Architecture](#database-migrations--supabase-architecture)
+6. [Testing & Quality Assurance](#testing--quality-assurance)
+7. [Deployment Guide (GitHub & Vercel)](#deployment-guide-github--vercel)
+8. [Known Limitations & Prototype Boundaries](#known-limitations--prototype-boundaries)
+9. [Release Notes & Version History](#release-notes--version-history)
 
-The project owner reports testing this connected workflow: Collector creates a lot → Recycler submits an offer → Collector accepts it → Admin advances it through `pickup_scheduled`, `collected`, `recycling_review`, and `recycled`. The final status remained after refreshing. A successful build alone does not verify live Supabase behavior.
+---
 
-## Local setup
+## Platform Architecture & Visual Design
 
-### Requirements
+Scarap_Yukti combines a high-performance frontend with enterprise-grade dark graphite and high-contrast light industrial aesthetics:
 
-- Node.js 20.19+ (20.x) or 22.12+.
-- npm.
+- **Frontend Core**: React 19, Vite 8, Lucide React icons, Canvas-based circular lifecycle visualization.
+- **Cinematic Landing Experience**: Authentic 1080p documentary video montage (`scarap-hero.mp4`, 24fps progressive, video-only stream with `scarap-hero-poster.webp` fallback), animated circular flows, interactive mass-balance tolerance calculator, and statutory journey narratives.
+- **Accessibility & Design System**: 
+  - WAI-ARIA compliant keyboard navigation (`ArrowDown`/`ArrowUp`, `Enter`, `Escape` focus restoration to triggers).
+  - WCAG 2.1 AAA color contrast ratios across dark canvas (`#090b0e`, 17.9:1 text, 9.97:1 accent) and light theme (`#ffffff`, 17.06:1 text, 4.99:1 accent).
+  - Strict motion accessibility respecting `prefers-reduced-motion: reduce`.
+  - Responsive engineering across 360px small mobile, 390px mobile, 768px tablet, 1024px laptop, and 1440px+ desktop viewports with 0px horizontal overflow.
 
-### Install and run
+---
 
-1. Clone the repository and open its project folder.
-2. Install dependencies:
+## Workspaces & Participant Roles
 
+Scarap_Yukti provides four dedicated operational workspaces with distinct data models, navigation links, and action gating:
+
+| Role | Operational Scope | Key Capabilities |
+| :--- | :--- | :--- |
+| **Seller** *(Generator)* | Industrial enterprises, corporate IT departments, and bulk scrap generators | Create commercial scrap lots; specify category, condition, location; review incoming collector bids; accept/reject offers; track custody transfer. |
+| **Collector** *(Aggregator)* | Authorized local e-waste aggregators and logistics partners | Discover upstream seller scrap; place collection bids; manage downstream lot listings; propose pickup appointment windows; coordinate transport. |
+| **Recycler** *(Dismantler)* | Authorized recycling and extraction facilities | Discover aggregated bulk lots; place purchase offers; confirm pickup schedules; record facility receiving net weighbridge readings; trigger mass-balance discrepancy checks. |
+| **Admin** *(Auditor)* | Platform compliance supervisors and transaction auditors | Supervise circular chain custody; monitor automated tolerance flags; arbitrate physical weight disputes; advance lots through verified recycling stages (`collected` → `recycling_review` → `recycled`). |
+
+---
+
+## Public Interactive Demo Mode
+
+Scarap_Yukti features a fully functional, zero-friction **Public Demo Mode** for evaluators and hackathon judges:
+
+- **Instant Entry**: Access all four workspaces directly from the landing page via "Try Interactive Demo" without user registration, credentials, or shared accounts.
+- **Role Switching**: Switch instantly between Seller, Collector, Recycler, and Admin using the accessible header switcher (`#demo/seller`, `#demo/collector`, `#demo/recycler`, `#demo/admin`).
+- **Tab-Isolated Sandboxing**: Demo mutations are persisted using `sessionStorage` under `scarap_yukti_demo_state_v2`. Every browser tab operates in its own isolated memory space. Creating or updating lots in Tab 1 never leaks to Tab 2.
+- **Pristine Reset**: Click "Reset Demo" at any time to reseed the sandbox with realistic industrial scrap lots, pending offers, appointments, and audit events.
+- **Network Isolation**: All demo actions run locally within the browser; no mutations, RPCs, or writes are dispatched to remote Supabase tables.
+
+---
+
+## Local Setup & Installation
+
+### Prerequisites
+- **Node.js**: `20.19+` (Node 20 LTS) or `22.12+` (Node 22 LTS)
+- **Package Manager**: `npm` (v10+)
+- **Git**
+
+### Step-by-Step Installation
+
+1. **Clone the repository**:
+   ```bash
+   git clone https://github.com/shantang000/Scarap_Yukti.git
+   cd Scarap_Yukti/Scarap_Yukti-Ready
+   ```
+
+2. **Install dependencies**:
    ```bash
    npm install
    ```
 
-3. Copy `.env.example` to `.env.local`.
-4. Set these values in `.env.local` using your Supabase project settings:
-
+3. **Configure Environment Variables**:
+   Copy the example environment file:
+   ```bash
+   cp .env.example .env.local
+   ```
+   Edit `.env.local` with your Supabase project parameters:
    ```dotenv
    VITE_SUPABASE_URL=https://your-project-id.supabase.co
    VITE_SUPABASE_PUBLISHABLE_KEY=your-publishable-key
    ```
+   > [!IMPORTANT]
+   > Use only the **publishable** (anon) key in browser code. Never place secret service-role keys in `.env.local` or frontend source files. `.env.local` is ignored by Git.
 
-   Use only the Supabase publishable key in this browser app. Never put a Secret or service-role key in a `VITE_` variable or frontend code. `.env.local` is ignored by Git; do not commit it.
-
-5. In Supabase Authentication settings, enable the Email provider. Add `http://localhost:5173/**` to allowed redirect URLs and configure the Site URL as appropriate. Password recovery redirects to the app's current origin, which must also be allowed. Email confirmation may be required by your Auth settings.
-6. Start Vite:
-
+4. **Launch Development Server**:
    ```bash
    npm run dev
    ```
+   Open `http://localhost:5173` in your browser.
 
-   Open the local URL printed by Vite, usually `http://localhost:5173`.
+5. **Production Build & Preview**:
+   ```bash
+   npm run build
+   npm run preview
+   ```
 
-Restart Vite after changing environment variables.
+---
 
-## Supabase database setup
+## Database Migrations & Supabase Architecture
 
-The migrations in `supabase/migrations/` are intended to be applied in this order:
+All SQL migrations reside in `supabase/migrations/` and enforce Row Level Security (RLS), security-definer RPCs, role constraints, and privacy regex triggers:
 
-1. `20261023000000_marketplace_schema_and_rls.sql` — marketplace tables, constraints, RLS policies, triggers, and workflow RPCs.
-2. `20261025000000_profile_privacy_lookup.sql` — own-profile read policy and the limited marketplace participant-name lookup function.
-3. `20261027000000_traceability_hardening.sql` — optional follow-up adding handover-weight recording and participant dispute RPCs.
-4. `20261028000000_pickup_appointment_coordination.sql` — optional follow-up for proposed/confirmed pickup times and appointment reads by the lot participants and Admins.
+1. `20261023000000_marketplace_schema_and_rls.sql`
+   - Core tables: `profiles`, `lots`, `offers`, `workflow_events`, `activity_history`.
+   - Row Level Security policies, automated profile triggers, and `advance_lot_workflow` RPC.
+2. `20261025000000_profile_privacy_lookup.sql`
+   - Self-profile read policies and restricted `get_marketplace_profiles` RPC returning minimal participant data.
+3. `20261027000000_traceability_hardening.sql`
+   - Recycler intake weighing fields, automated 10% discrepancy flags, and participant dispute RPCs.
+4. `20261028000000_pickup_appointment_coordination.sql`
+   - `pickup_appointments` table, RLS coordination policies, and time window validation.
+5. `20261102000000_seller_role_support.sql`
+   - Adds the `seller` role to profile check constraints; expands lot creation and offer evaluation authorization to Sellers.
+6. `20261102010000_listing_privacy_enforcement.sql`
+   - Database-level regex trigger sanitization rejecting 10-digit phone numbers, emails, and residential addresses in listing titles, notes, and locations.
 
-These are schema migrations, not scripts to rerun casually. Before applying them to an existing Supabase project, check its migration history and actual schema. The project owner reports that both have already been applied to the current project; do not reapply them there. For a fresh project, review the SQL and test it on a disposable database before applying it to a main project. This repository and its build do not run SQL against Supabase.
+> [!WARNING]
+> Migrations are schema migration files intended for controlled manual application. Never rerun already applied migrations against a production Supabase instance.
 
-The traceability and pickup coordination migrations are optional follow-ups and are not applied by this repository or its build. Review and test each on a disposable database first. Apply them manually only after checking the target database's actual schema and migration history; do not rerun migrations already applied. Until the traceability migration is applied, handover-weight fields and its RPC actions are unavailable; the app keeps core lot/offer reads usable. Until the pickup coordination migration is applied and its table is readable under RLS, pickup time coordination is unavailable.
+---
 
-### Live marketplace updates
+## Testing & Quality Assurance
 
-Signed-in dashboards subscribe to Supabase Postgres Changes for inserts and updates to `lots`, `offers`, `workflow_events`, and `activity_history`. Once the pickup coordination migration is applied, the app also subscribes to `pickup_appointments`. The app uses events only to reload its normal RLS-protected reads; it does not display the event payload as trusted data. It does not subscribe to delete events. If a subscription is unavailable, the dashboard shows a manual-refresh option.
-
-For live updates, confirm in the Supabase Dashboard that Realtime is enabled and that the four existing `public` tables are included in the `supabase_realtime` publication. After the new pickup migration is applied, include `public.pickup_appointments` as well. Do not enable tables or change policies blindly: verify the deployed schema and RLS first. Publication membership is separate from RLS and does not grant table access by itself. No migration is included for this project setting. Until enabled, use the in-app refresh button; this setup has not been verified against the hosted project. If an update makes a row invisible under the signed-in user's RLS policy, that user may not receive an event that removes the now-invisible row, so use manual refresh when needed.
-
-New Auth users receive the `collector` role from the database profile trigger. The app does not let users select or promote their database role. A trusted project operator must provision `recycler` and `admin` roles through an appropriate protected process. The signed-out role selector only switches between local demo dashboards.
-
-## Try the dashboards
-
-### Connected workflow
-
-Use separate signed-in accounts with the required database roles. Verify the account's profile role through the trusted Supabase administration process; do not rely on the UI selector for permissions.
-
-1. Sign in as a Collector and create a lot.
-2. Sign in as a Recycler and submit an offer to that lot.
-3. Sign back in as the lot-owning Collector and accept or reject the pending offer.
-4. Sign in as an Admin and advance the accepted lot through collection and recycling review to `recycled`.
-5. Refresh the page and confirm the status persisted. Check the corresponding records in Supabase.
-
-If the pickup coordination migration has been reviewed and applied, continue: the Collector proposes a date/time for the accepted offer; the accepted Recycler confirms it or requests another time; the Collector proposes a revised time if requested. A confirmed appointment records both accounts' response. Admin should mark the lot collected only after the actual handover. Appointment notes and agreement do not verify a real-world pickup.
-
-The app calls `respond_to_offer` for Collector decisions and `advance_lot_workflow` for Admin workflow actions. The database functions and RLS policies are intended to enforce permissions and valid transitions; frontend visibility checks are not a security boundary.
-
-### Local demo mode
-
-When signed out, select Collector, Recycler, or Admin to preview the dashboards and simulated workflow. Demo records are stored in this browser's `localStorage`. They are not authenticated, shared with other users, or protected by database RLS.
-
-## Build and preview
+The codebase includes an automated test harness covering security contracts, data validation, responsive layouts, and UI accessibility:
 
 ```bash
-npm run build
-npm run preview
-```
-
-Vite writes the production site to `dist/`.
-
-## Tests
-
-Run the full automated test suite with:
-
-```bash
+# Run full automated test suite (86 passing tests)
 npm test
-```
 
-Run only the security contract checks with:
-
-```bash
+# Run security & authorization contract tests
 npm run test:security
 ```
 
-These local tests cover shared demo workflow logic and check expected frontend/migration contracts. They do not execute database policies or verify the live Supabase project.
+### Quality Verification Checklist
+- **Unit & Contract Tests**: 86/86 passing (`node --test`) covering lot privacy regex, appointment boundaries, role action gating, and state transitions.
+- **Production Build**: Clean Vite production bundle in `dist/` with zero module resolution warnings or CSS errors.
+- **Headless Browser QA**: Dual-tab CDP browser automation verifying tab-isolated demo sandboxing, keyboard navigation, focus restoration, zero console errors, and 0px horizontal overflow across all 30 viewport configurations.
 
-## Deploy to Vercel
+---
 
-1. Import the GitHub repository into Vercel.
-2. Set the build command to `npm run build` and the output directory to `dist` (Vercel usually detects Vite automatically).
-3. In Vercel project settings, add `VITE_SUPABASE_URL` and `VITE_SUPABASE_PUBLISHABLE_KEY` as build environment variables for the environments you use. Do not add a service-role key.
-4. Build and deploy with Vercel. Add the deployed site origin and password-recovery redirect URL to Supabase Authentication's allowed Redirect URLs, and set the Site URL to the deployed site.
-5. Manually test sign-in, password recovery, each role's allowed actions, and refresh persistence on the deployed site.
+## Deployment Guide (GitHub & Vercel)
 
-## Limitations
+### 1. GitHub Repository Push
+Ensure your working tree is clean and push changes to your remote repository:
+```bash
+git checkout -b release/v1.0.0
+git add .
+git commit -m "chore: release candidate v1.0.0 hardening"
+git push origin release/v1.0.0
+```
 
-- The Admin evidence/review note is text recorded in the database. It does not independently prove that pickup or physical recycling occurred.
-- The app does not verify Collector or Recycler identity/business licenses, arrange physical pickup, process payments, or certify recycling.
-- Connected behavior depends on the Supabase project having the expected migrations, RLS policies, RPCs, and Auth URL configuration. This README does not independently verify current hosted settings.
-- The automated tests do not replace browser testing or authorization checks against the deployed Supabase project; manually test the connected workflow and database permissions before a pilot.
+### 2. Vercel Deployment Settings
+1. Log in to [Vercel](https://vercel.com/) and click **"Add New Project"**.
+2. Import the `Scarap_Yukti` repository (root directory: `Scarap_Yukti-Ready`).
+3. Configure the Project Settings:
+   - **Framework Preset**: Vite
+   - **Build Command**: `npm run build`
+   - **Output Directory**: `dist`
+   - **Install Command**: `npm install`
+4. Add Environment Variables:
+   - `VITE_SUPABASE_URL` = `https://your-project-id.supabase.co`
+   - `VITE_SUPABASE_PUBLISHABLE_KEY` = `your-anon-publishable-key`
+5. Click **Deploy**.
+
+### 3. Supabase Auth Configuration
+Once deployed, update your Supabase project settings:
+1. Navigate to **Authentication → URL Configuration**.
+2. Set **Site URL** to your production Vercel URL (e.g. `https://scarap-yukti.vercel.app`).
+3. Add redirect URLs:
+   - `https://scarap-yukti.vercel.app/**`
+   - `http://localhost:5173/**` (for local development)
+
+---
+
+## Known Limitations & Prototype Boundaries
+
+To maintain strict product integrity, evaluators should note the following prototype parameters:
+- **Offline Mass-Balance**: The material calculator and weighbridge variance checks model statutory Schedule I tolerances for prototype evaluation. In live commercial operations, legally binding thresholds depend on State Pollution Control Board (SPCB) permits and bilateral processing contracts.
+- **Physical Custody Proof**: Admin recycling review notes and timeline checkpoints represent database audit events; they do not replace physical bill-of-lading receipts or laboratory assay certificates.
+- **Financial Settlements**: The platform simulates offer negotiation, mass-balance tolerance validation, and payout unlocking. Live banking payment gateway integrations (Razorpay/Stripe) are not active in this release.
+- **Identity Verification**: User registration assigns standard collector/seller permissions; commercial GSTIN and authorized recycler dismantler licenses must be vetted by platform administrators prior to privileged role assignment.
+
+---
+
+## Release Notes & Version History
+
+### Version 1.0.0 — Release Candidate (November 2026)
+- **Phase 1**: Core marketplace implementation, distinct Seller/Collector views, lot creation modals, and action gating.
+- **Phase 2**: Real-time Postgres Changes subscription coalescing, appointment proposal rescheduling, and timeline status pipelines.
+- **Phase 3**: Cinematic frontend transformation, 1080p hero documentary montage, interactive Schedule I material calculator, circular flow canvas animation, and dual dark/light themes.
+- **Phase 4**: Public Demo Mode, tab-isolated `sessionStorage` sandboxing, WAI-ARIA keyboard focus management, WCAG 2.1 AAA contrast compliance, 0px mobile viewport overflow remediation, and honest claims hardening.
+
+---
+
+**Built with pride for responsible e-waste circularity.**

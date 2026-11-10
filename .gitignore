@@ -1,8 +1,9 @@
 node_modules/
 dist/
-.env
-.env.*
+.env*
 !.env.example
 supabase/.temp/
 npm-debug.log*
 /Microsoft/
+.vercel
+.tmp-chrome*
