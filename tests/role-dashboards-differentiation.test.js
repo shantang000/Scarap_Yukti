@@ -26,7 +26,7 @@ test("Seller and Collector view files exist as separate and distinct components"
   // Seller-specific terminology and elements
   assert.match(sellerCode, /My E-Waste Listings/);
   assert.match(sellerCode, /seller-workspace-view/);
-  assert.match(sellerCode, /Your scrap listings are visible to authorized recyclers/);
+  assert.match(sellerCode, /Your scrap listings are visible to participating recyclers/);
   assert.match(sellerCode, /Incoming Recycler Offers/);
   assert.match(sellerCode, /Create Listing|Add listing/);
 

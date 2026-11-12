@@ -1,16 +1,17 @@
 import React, { useState } from "react";
-import { ArrowLeft, Edit3, Filter, MapPin, Plus, Search, ShieldCheck, X } from "lucide-react";
+import { ArrowLeft, Edit3, Filter, Info, MapPin, Plus, Search, ShieldCheck, X } from "lucide-react";
 import {
   EmptyState,
   money,
   OfferStatusPill,
-  ProgressTrack,
   shortDate,
   statusLabel,
   statusOptions,
   StatusPill
 } from "./MarketplaceUi.jsx";
 import { TraceabilityTimeline } from "./TraceabilityTimeline.jsx";
+import { formatWeightDisplay } from "../lib/quantityUnits.js";
+import { getLotNextStepGuidance } from "../lib/workflowGuidance.js";
 
 export function SellerWorkspaceView({
   lots,
@@ -38,6 +39,8 @@ export function SellerWorkspaceView({
   const [mobileDetailOpen, setMobileDetailOpen] = useState(false);
 
   const selectedLot = lots.find((l) => l.id === selectedLotId) || lots[0] || null;
+  const selectedAppointment = selectedLot ? pickupAppointmentsByLot?.get(selectedLot.id) : null;
+  const nextGuidance = selectedLot ? getLotNextStepGuidance(selectedLot, selectedAppointment, "Seller") : null;
 
   return (
     <section className="panel dashboard-panel seller-workspace-view">
@@ -46,19 +49,19 @@ export function SellerWorkspaceView({
           <h2>My E-Waste Listings</h2>
           <p>
             {readOnly
-              ? "Manage your electronic scrap listings, review incoming recycler offers, and coordinate pickup appointments."
-              : "Review offers, accept or reject recycler bids, and revise open listings."}
+              ? "Manage your electronic scrap listings, review incoming buyer offers, and coordinate pickup times."
+              : "Review sample listings, compare buyer offers, and test how pickup scheduling works in this browser demo."}
           </p>
         </div>
         <span className={readOnly ? "connected-label" : "demo-label"}>
-          {readOnly ? "CONNECTED SELLER" : "DEMO SELLER"}
+          {readOnly ? "LIVE SELLER" : "DEMO SELLER"}
         </span>
       </div>
 
       <div className="inline-hint seller-guidance-hint">
         <ShieldCheck size={15} />
         <span>
-          Your scrap listings are visible to authorized recyclers. Contact details and exact addresses remain private. Review bids, accept an offer, and coordinate pickup when ready.
+          Your scrap listings are visible to participating recyclers. Personal phone numbers and exact house addresses stay hidden until you accept an offer. Note: Photos and online payment settlement are not active in this version.
         </span>
       </div>
 
@@ -126,6 +129,7 @@ export function SellerWorkspaceView({
                     aria-selected={isSelected}
                     onKeyDown={(e) => {
                       if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault();
                         setSelectedLotId(lot.id);
                         setMobileDetailOpen(true);
                       }
@@ -137,7 +141,7 @@ export function SellerWorkspaceView({
                     </div>
                     <div className="master-row-sub">
                       <span>{lot.id} · {lot.category}</span>
-                      <b>{lot.weight} kg</b>
+                      <b>{formatWeightDisplay(lot.weight)}</b>
                     </div>
                     <div className="master-row-footer">
                       <span className="location-tag">
@@ -146,7 +150,9 @@ export function SellerWorkspaceView({
                       <span className={`offers-badge ${pendingBids > 0 ? "has-pending" : ""}`}>
                         {lot.offers.length === 0
                           ? "Awaiting offers"
-                          : `${lot.offers.length} ${lot.offers.length === 1 ? "offer" : "offers"}`}
+                          : pendingBids > 0
+                            ? `${pendingBids} pending ${pendingBids === 1 ? "offer" : "offers"}`
+                            : `${lot.offers.length} ${lot.offers.length === 1 ? "offer" : "offers"}`}
                       </span>
                     </div>
                   </article>
@@ -159,7 +165,7 @@ export function SellerWorkspaceView({
               detail={
                 query
                   ? "Try a different search term or status filter."
-                  : "Post an e-waste listing to start receiving acquisition offers from recyclers."
+                  : "Post an e-waste listing to start receiving purchase offers."
               }
               action={
                 !query ? (
@@ -207,25 +213,39 @@ export function SellerWorkspaceView({
                   ) : selectedLot.status === "Offer submitted" ? (
                     <span
                       className="offers-badge"
-                      title="Listing specifications are locked while active bids are pending. Reject bids to reopen and revise."
+                      title="Listing details are locked while offers are pending. Reject pending offers to reopen editing."
                     >
-                      Revisions locked (bids pending)
+                      Locked (offers pending)
                     </span>
                   ) : (
                     <span className="offers-badge">
-                      Listing locked ({statusLabel(selectedLot.status)})
+                      Locked ({statusLabel(selectedLot.status)})
                     </span>
                   )}
                 </div>
               </div>
 
+              {nextGuidance && (
+                <div className="next-step-guidance-card" role="region" aria-label="Listing status and next step">
+                  <div className="next-step-top">
+                    <span className="next-step-badge">
+                      <Info size={14} /> {nextGuidance.summary}
+                    </span>
+                    <span className="responsible-party-pill">
+                      Waiting on: <strong>{nextGuidance.responsible}</strong>
+                    </span>
+                  </div>
+                  <p className="next-step-body">{nextGuidance.nextStep}</p>
+                </div>
+              )}
+
               <div className="specs-grid">
                 <div>
                   <label>Declared Weight</label>
-                  <strong>{selectedLot.weight} kg</strong>
+                  <strong>{formatWeightDisplay(selectedLot.weight)}</strong>
                 </div>
                 <div>
-                  <label>Pickup Location</label>
+                  <label>Pickup Area</label>
                   <span>
                     <MapPin size={12} /> {selectedLot.location}
                   </span>
@@ -242,57 +262,8 @@ export function SellerWorkspaceView({
 
               {selectedLot.notes && (
                 <div className="inspector-notes">
-                  <label>Listing Specifications & Notes</label>
+                  <label>Material Notes & Condition</label>
                   <p>{selectedLot.notes}</p>
-                </div>
-              )}
-
-              <div className="workflow-progress">
-                <span>Disposal & Recycling Progress</span>
-                <strong>{statusLabel(selectedLot.status)}</strong>
-                <ProgressTrack status={selectedLot.status} />
-              </div>
-
-              <TraceabilityTimeline
-                lot={selectedLot}
-                workflowEvents={traceProps?.workflowEvents || []}
-                pickupAppointment={pickupAppointmentsByLot?.get(selectedLot.id)}
-                role="Seller"
-              />
-
-              {/* Sellers do NOT record handover weight (Recycler action), but CAN dispute eligible statuses */}
-              {LotTraceActions && (
-                <LotTraceActions
-                  lot={selectedLot}
-                  mode={readOnly ? "seller" : "info"}
-                  available={traceabilityAvailable}
-                  onDispute={traceProps?.onDispute}
-                />
-              )}
-
-              {selectedLot.status === "Pickup scheduled" &&
-                selectedLot.offers.some((offer) => offer.status === "accepted") &&
-                PickupCoordination && (
-                  <PickupCoordination
-                    role="seller"
-                    lot={selectedLot}
-                    appointment={pickupAppointmentsByLot.get(selectedLot.id)}
-                    available={pickupCoordinationAvailable}
-                    busy={pickupBusyLotId === selectedLot.id}
-                    connected={readOnly}
-                    onPropose={onProposePickup}
-                  />
-                )}
-
-              {selectedLot.status === "Recycling review" && selectedLot.evidence && (
-                <div className="evidence-note">
-                  <ShieldCheck size={15} />
-                  <div>
-                    <strong>
-                      {readOnly ? "Verified Evidence/Review Note" : "Demo Evidence Record"}
-                    </strong>
-                    <span>{selectedLot.evidence}</span>
-                  </div>
                 </div>
               )}
 
@@ -300,7 +271,7 @@ export function SellerWorkspaceView({
               <div className="offers-section">
                 <div className="offers-heading">
                   <strong>Incoming Recycler Offers ({selectedLot.offers.length})</strong>
-                  <span>Compare offers from certified recyclers before accepting</span>
+                  <span>Compare offer amounts and pickup terms before accepting. Payments settle outside this platform.</span>
                 </div>
 
                 {selectedLot.offers.length ? (
@@ -313,7 +284,7 @@ export function SellerWorkspaceView({
                           <div className="offer-ledger-top">
                             <div>
                               <strong>{offer.recycler}</strong>
-                              <small>{offer.message || "No commercial terms attached."}</small>
+                              <small>{offer.message || "No additional terms attached."}</small>
                             </div>
                             <div className="offer-price-col">
                               <span className="offer-price">{money(offer.price)}</span>
@@ -345,15 +316,58 @@ export function SellerWorkspaceView({
                 ) : (
                   <EmptyState
                     title="No offers received yet"
-                    detail="Incoming acquisition bids from authorized recyclers will appear here for comparison."
+                    detail="Offers submitted by participating recyclers will appear here for comparison."
                     compact
                   />
                 )}
               </div>
+
+              {selectedLot.status === "Pickup scheduled" &&
+                selectedLot.offers.some((offer) => offer.status === "accepted") &&
+                PickupCoordination && (
+                  <PickupCoordination
+                    role="seller"
+                    lot={selectedLot}
+                    appointment={selectedAppointment}
+                    available={pickupCoordinationAvailable}
+                    busy={pickupBusyLotId === selectedLot.id}
+                    connected={readOnly}
+                    onPropose={onProposePickup}
+                  />
+                )}
+
+              {selectedLot.status === "Recycling review" && selectedLot.evidence && (
+                <div className="evidence-note">
+                  <ShieldCheck size={15} />
+                  <div>
+                    <strong>
+                      {readOnly ? "Participant Review Note (Not Independently Verified)" : "Demo Review Note"}
+                    </strong>
+                    <span>{selectedLot.evidence}</span>
+                  </div>
+                </div>
+              )}
+
+              {/* Sellers do NOT record handover weight (Recycler action), but CAN dispute eligible statuses */}
+              {LotTraceActions && (
+                <LotTraceActions
+                  lot={selectedLot}
+                  mode={readOnly ? "seller" : "info"}
+                  available={traceabilityAvailable}
+                  onDispute={traceProps?.onDispute}
+                />
+              )}
+
+              <TraceabilityTimeline
+                lot={selectedLot}
+                workflowEvents={traceProps?.workflowEvents || []}
+                pickupAppointment={selectedAppointment}
+                role="Seller"
+              />
             </div>
           ) : (
             <div className="inspector-empty">
-              <p>Select a listing from the left to inspect specifications, review recycler bids, or coordinate pickup.</p>
+              <p>Select a listing from the left to inspect specifications, review bids, or coordinate pickup.</p>
             </div>
           )}
         </div>
@@ -361,4 +375,3 @@ export function SellerWorkspaceView({
     </section>
   );
 }
-

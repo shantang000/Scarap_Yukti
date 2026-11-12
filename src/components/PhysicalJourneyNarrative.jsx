@@ -1,9 +1,6 @@
 import React, { useState, useEffect } from "react";
 import {
-  ArrowRight,
-  CheckCircle2,
   ChevronRight,
-  Database,
   Layers,
   Lock,
   Package,
@@ -11,7 +8,6 @@ import {
   Pause,
   Recycle,
   Scale,
-  ShieldAlert,
   ShieldCheck,
   Truck,
   Zap
@@ -22,107 +18,107 @@ const JOURNEY_STAGES = [
   {
     id: "seller",
     step: "01",
-    title: "Upstream Listing & PII Shielding",
-    roleName: "Enterprise / SMB Seller",
+    title: "Seller Lists E-Waste",
+    roleName: "Seller / Business Generator",
     roleKey: "Seller",
-    badge: "STAGE 01 · GENERATOR",
+    badge: "STEP 01 · LISTING",
     icon: <Package size={20} className="text-lime" />,
-    headline: "Surplus Asset Declaration with Zero Off-Platform Leaks",
+    headline: "List surplus electronics without exposing your personal contact details",
     narrative:
-      "A commercial generator or household lists obsolete IT equipment, telecom servers, or battery scrap with estimated gross weights and municipal zones. PostgreSQL triggers scrub 10-digit Indian mobile numbers, emails, and residential addresses to eliminate gray-market diversion.",
-    equipment: "Physical inventory audit, PII regex trigger",
-    statutoryRule: "E-Waste Rules (2022) Rule 4: Responsibilities of the manufacturer & bulk consumer.",
+      "Offices, factories, and households post e-waste listings with category, approximate area, and estimated weight. Automatic privacy filters block phone numbers, emails, and exact house numbers until an offer is accepted.",
+    equipment: "Approximate area listing · Automatic contact filter",
+    statutoryRule: "Supports responsible e-waste segregation for IT & battery scrap.",
     telemetry: {
-      "Asset Batch": "Retired Telecom Server Racks (42U)",
-      "Estimated Mass": "84.5 kg",
-      "Corridor Zone": "Okhla Phase-3, South Delhi",
-      "Privacy Guard": "100% Sanitized (Zero PII)"
+      "Sample Batch": "Retired Office Laptops (24 units)",
+      "Declared Weight": "48.0 kg",
+      "Public Area": "DLF Phase 2, Gurugram",
+      "Privacy Status": "Contact Hidden Until Accepted"
     },
-    demoCta: "Inspect Seller Experience"
+    demoCta: "Open Seller Demo"
   },
   {
     id: "collection",
     step: "02",
-    title: "On-Site Weighing & OTP Custody Handover",
-    roleName: "Verified Aggregator / Collector",
+    title: "Collector Pickup & Staging",
+    roleName: "Local Collector / Aggregator",
     roleKey: "Collector",
-    badge: "STAGE 02 · LOGISTICS",
+    badge: "STEP 02 · PICKUP",
     icon: <Truck size={20} className="text-lime" />,
-    headline: "Tamper-Evident Physical Handover at Generator Site",
+    headline: "Claim nearby seller batches and plan consolidated pickups",
     narrative:
-      "The authorized Collector arrives at the pickup site equipped with an industrial portable platform scale. A one-time 6-digit secure handover token is exchanged on-site before the vehicle is loaded, transferring verified custody to the aggregator.",
-    equipment: "Portable industrial platform scale, Secure OTP exchange",
-    statutoryRule: "E-Waste Rules (2022) Rule 5: Extended Producer Responsibility (EPR) transportation protocols.",
+      "Collectors review available seller batches in the demo feed, propose a pickup date, and stage collected work into aggregated consignment lots. On-site weighing and transport coordination happen offline.",
+    equipment: "Batch consolidation · Scheduled pickup window",
+    statutoryRule: "Structured aggregator handovers reduce informal scrap loss.",
     telemetry: {
-      "Gross Weight": "84.50 kg",
-      "Tare Weight": "0.00 kg (Dedicated Container)",
-      "Net Weight": "84.50 kg verified",
-      "Custody OTP": "Token Verified · Match Confirmed"
+      "Sample Batch": "Server Enclosures & Copper Busbars",
+      "Declared Weight": "92.5 kg",
+      "Pickup Window": "Proposed & Agreed in App",
+      "Verification Note": "Physical weighing handled on-site"
     },
-    demoCta: "Inspect Collector Intake"
+    demoCta: "Open Collector Demo"
   },
   {
     id: "aggregation",
     step: "03",
-    title: "Consignment Bundling & Bidding",
-    roleName: "Consolidation Hub",
+    title: "Bulk Consignment Bidding",
+    roleName: "Collector → Recycler",
     roleKey: "Collector",
-    badge: "STAGE 03 · AGGREGATION",
+    badge: "STEP 03 · OFFERS",
     icon: <Layers size={20} className="text-lime" />,
-    headline: "Stream Consolidation into High-Density Truckloads",
+    headline: "Compare transparent buyer bids under fair 1-bid-per-recycler rules",
     narrative:
-      "The Aggregator combines multiple discrete collected batches into categorized industrial consignment lots. Registered dismantlers and recyclers submit binding commercial bids under a strict one-bid-per-recycler policy, preventing market front-running.",
-    equipment: "Hub consolidation storage, batch consignment tagging",
-    statutoryRule: "Central Pollution Control Board (CPCB) Guidelines for Storage & Segregation.",
+      "Participating recyclers browse open lots by category and area, then submit a single competitive offer per lot. Accepting one offer automatically declines other pending bids and opens pickup scheduling.",
+    equipment: "1-offer-per-recycler limit · Side-by-side bid comparison",
+    statutoryRule: "Prevents duplicate spam offers and post-acceptance edits.",
     telemetry: {
-      "Consignment ID": "CON-2026-DEL-04",
-      "Aggregated Batches": "3 Generator Lots Combined",
-      "Total Consignment Mass": "236.5 kg",
-      "Commercial Status": "3 Bids Under Review"
+      "Sample Consignment": "Server Motherboards & RAM",
+      "Declared Weight": "85.0 kg",
+      "Offer Status": "2 Competing Bids Compared",
+      "Payment Terms": "Settled directly between parties"
     },
     demoCta: "Inspect Consignments"
   },
   {
     id: "recycler",
     step: "04",
-    title: "Weighbridge Intake & Variance Audit",
-    roleName: "Authorized Smelter / Recycler",
+    title: "Receiving Weight Check",
+    roleName: "Recycler Facility",
     roleKey: "Recycler",
-    badge: "STAGE 04 · REFINING",
+    badge: "STEP 04 · INTAKE",
     icon: <Scale size={20} className="text-lime" />,
-    headline: "Certified Facility Weighbridge Intake & Mass-Balance Check",
+    headline: "Record receiving net weight and spot major weight discrepancies",
     narrative:
-      "The truck arrives at the licensed recycling and smelting facility. Gross and tare weights are measured on a certified weighbridge. Actual net weight is checked against category discrepancy tolerance thresholds; within-tolerance variances update the mass balance automatically.",
-    equipment: "Industrial axle weighbridge (reference margin ±0.05%), Moisture analyzer",
-    statutoryRule: "Schedule I allowable variance criteria & SPCB Consent to Operate (CTO).",
+      "Once collection is recorded, the accepted recycler enters the measured receiving weight. If receiving weight differs significantly from the declared weight (>10%), the lot is highlighted for compliance review.",
+    equipment: "Receiving weight entry · Discrepancy % check",
+    statutoryRule: "Highlights abnormal weight loss between pickup and facility.",
     telemetry: {
-      "Facility Intake": "Indo-German Smelting Facility",
-      "Weighbridge Net": "237.20 kg",
-      "Variance vs Declared": "+0.29% (Admissible)",
-      "Discrepancy Status": "TOLERANCE COMPLIANT · PROCESSED"
+      "Sample Receiving": "Industrial Display Monitors",
+      "Receiving Weight": "64.2 kg entered",
+      "Weight Difference": "-1.23% vs declared",
+      "Audit Status": "Logged in Workflow History"
     },
-    demoCta: "Inspect Recycler Weighbridge"
+    demoCta: "Open Recycler Demo"
   },
   {
     id: "traceability",
     step: "05",
-    title: "Closed-Loop Governance & Event Ledger",
-    roleName: "Compliance Officer / Admin",
+    title: "Compliance Review & Archive",
+    roleName: "Operations Admin",
     roleKey: "Admin",
-    badge: "STAGE 05 · AUDIT",
+    badge: "STEP 05 · AUDIT",
     icon: <ShieldCheck size={20} className="text-lime" />,
-    headline: "Append-Only Chain-of-Custody Audit Log for Anti-Diversion",
+    headline: "Review processing notes, resolve disputes, and close the loop",
     narrative:
-      "Every transition from generator declaration through weighbridge intake and recycling review is logged chronologically in an append-only event audit log. Regulatory bodies and participants inspect complete custody history with dispute arbitration and discrepancy tracking.",
-    equipment: "PostgreSQL Row-Level Security, Security-Definer RPC audit ledger",
-    statutoryRule: "E-Waste Rules (2022) Rule 13: Mass balance auditing and verification.",
+      "Operations admins review weight discrepancies, hold disputed lots while investigating issues, require documented processing notes before completion, and export workspace records to CSV.",
+    equipment: "Dispute holds · Required processing review notes",
+    statutoryRule: "Form-6 statutory certificates must still be issued directly by recyclers.",
     telemetry: {
-      "Audit Trail": "6 Chronological Workflow Milestones",
-      "Dispute Status": "Zero Active Disputes",
-      "Custody Chain": "Closed Loop Completed",
-      "Governance Status": "Certified Recycled (Workflow Status)"
+      "Workflow Steps": "6 Tracked Custody Milestones",
+      "Dispute Controls": "Hold & Resume Arbitration",
+      "Data Export": "Clean CSV Spreadsheet",
+      "Current State": "Recycled (Workflow Complete)"
     },
-    demoCta: "Inspect Compliance Ledger"
+    demoCta: "Open Admin Demo"
   }
 ];
 
@@ -150,28 +146,28 @@ export function PhysicalJourneyNarrative({ onLaunchDemo }) {
       <div className="section-header">
         <div className="section-eyebrow-row">
           <span className="section-eyebrow">
-            <Recycle size={15} /> PHYSICAL MATERIAL INTEGRITY
+            <Recycle size={15} /> HOW MATERIAL MOVES
           </span>
           <div className="journey-autoplay-controls">
             <button
               type="button"
               className={`journey-play-btn ${isPlaying ? "active" : ""}`}
               onClick={() => setIsPlaying(!isPlaying)}
-              aria-label={isPlaying ? "Pause journey autoplay" : "Play journey walkthrough"}
+              aria-label={isPlaying ? "Pause step walkthrough" : "Auto-advance step walkthrough"}
             >
               {isPlaying ? <Pause size={13} /> : <Play size={13} />}
-              <span>{isPlaying ? "Autoplay Active" : "Play Custody Walkthrough"}</span>
+              <span>{isPlaying ? "Pause Walkthrough" : "Autoplay Steps"}</span>
             </button>
           </div>
         </div>
 
-        <h2>Physical E-Waste Custody Circuit</h2>
+        <h2>Step-by-Step Custody Walkthrough</h2>
         <p>
-          Trace an industrial electronics batch from commercial retirement through certified intake weighing, consignment aggregation, and smelter refining.
+          Follow how an e-waste batch moves from initial listing to facility intake, weight comparison, and compliance closure.
         </p>
       </div>
 
-      {/* 60FPS CIRCUIT CANVAS */}
+      {/* INTERACTIVE STAGE CANVAS */}
       <div className="journey-canvas-wrap">
         <CircularFlowCanvas
           activeStageId={activeStageId}
@@ -227,14 +223,14 @@ export function PhysicalJourneyNarrative({ onLaunchDemo }) {
             <div className="statutory-item">
               <ShieldCheck size={16} className="text-lime" />
               <div>
-                <strong>Regulatory Reference Context:</strong>
+                <strong>Operational Safeguard:</strong>
                 <span>{currentStage.statutoryRule}</span>
               </div>
             </div>
             <div className="statutory-item">
               <Scale size={16} className="text-cyan" />
               <div>
-                <strong>Physical Instrumentation:</strong>
+                <strong>Stage Controls:</strong>
                 <span>{currentStage.equipment}</span>
               </div>
             </div>
@@ -250,15 +246,15 @@ export function PhysicalJourneyNarrative({ onLaunchDemo }) {
               <span>{currentStage.demoCta}</span>
               <ChevronRight size={14} />
             </button>
-            <span className="cta-helper-text">Opens isolated demo dashboard with pre-loaded mock records</span>
+            <span className="cta-helper-text">Opens isolated browser demo with sample records</span>
           </div>
         </div>
 
-        {/* TELEMETRY TELEGRAPH PANE */}
+        {/* ILLUSTRATIVE RECORD SUMMARY PANE */}
         <div className="detail-card-telemetry">
           <div className="telemetry-header">
             <span className="live-pulse-dot" />
-            <strong>SIMULATED FIELD TELEMETRY</strong>
+            <strong>SAMPLE STAGE EXAMPLE</strong>
           </div>
 
           <div className="telemetry-grid">
@@ -272,7 +268,7 @@ export function PhysicalJourneyNarrative({ onLaunchDemo }) {
 
           <div className="telemetry-foot">
             <Lock size={12} />
-            <span>Verified & logged to Postgres audit trigger</span>
+            <span>Illustrative workflow example (no real hardware scale connected)</span>
           </div>
         </div>
       </div>

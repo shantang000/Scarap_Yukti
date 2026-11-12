@@ -11,8 +11,10 @@ import {
   ChevronUp
 } from "lucide-react";
 
+import { formatWeightDisplay } from "../lib/quantityUnits.js";
+
 export function OperationalSummary({ lots = [], role = "Collector" }) {
-  const [showCharts, setShowCharts] = useState(true);
+  const [showCharts, setShowCharts] = useState(false);
 
   const totalLots = lots.length;
   const totalMass = lots.reduce((acc, l) => acc + (Number(l.weight) || 0), 0);
@@ -109,25 +111,27 @@ export function OperationalSummary({ lots = [], role = "Collector" }) {
     }
 
     if (role === "Recycler") {
+      const openForBids = lots.filter((l) => ["Open", "Offer submitted"].includes(l.status));
+      const openMass = openForBids.reduce((acc, l) => acc + (Number(l.weight) || 0), 0);
       return [
         {
           label: "Available Lots",
-          value: totalLots,
+          value: openForBids.length,
           detail: "Open for bids",
           icon: <Package size={15} />,
           tone: "teal"
         },
         {
           label: "Available Material",
-          value: `${totalMass.toLocaleString("en-IN")} kg`,
+          value: `${openMass.toLocaleString("en-IN")} kg`,
           detail: "Estimated scrap weight",
           icon: <Scale size={15} />,
           tone: "blue"
         },
         {
           label: "Bidding Open",
-          value: pendingLots,
-          detail: "Ready for offers",
+          value: openForBids.filter((l) => l.status === "Open").length,
+          detail: "No bids placed yet",
           icon: <Clock size={15} />,
           tone: "amber"
         },
@@ -231,13 +235,13 @@ export function OperationalSummary({ lots = [], role = "Collector" }) {
         ))}
       </div>
 
-      {/* SVG TELEMETRY CHARTS SECTION */}
+      {/* WEIGHT & STATUS OVERVIEW CHARTS */}
       <div className="op-charts-collapsible">
         <div className="op-charts-header">
           <div className="op-charts-title">
             <BarChart3 size={15} className="text-lime" />
-            <strong>Physical Mass & Pipeline Telemetry</strong>
-            <span className="charts-count-tag">{totalLots} lots · {totalMass.toLocaleString("en-IN")} kg</span>
+            <strong>Material Weight & Status Breakdown</strong>
+            <span className="charts-count-tag">{totalLots} lots · {formatWeightDisplay(totalMass)}</span>
           </div>
           <button
             type="button"
@@ -245,7 +249,7 @@ export function OperationalSummary({ lots = [], role = "Collector" }) {
             onClick={() => setShowCharts(!showCharts)}
             aria-expanded={showCharts}
           >
-            {showCharts ? <><span>Hide Telemetry</span> <ChevronUp size={14} /></> : <><span>View Telemetry</span> <ChevronDown size={14} /></>}
+            {showCharts ? <><span>Hide Charts</span> <ChevronUp size={14} /></> : <><span>Show Charts</span> <ChevronDown size={14} /></>}
           </button>
         </div>
 
@@ -254,8 +258,8 @@ export function OperationalSummary({ lots = [], role = "Collector" }) {
             {/* 1. CATEGORY MASS DISTRIBUTION (GENUINE SVG BAR CHART) */}
             <div className="op-chart-card">
               <div className="chart-card-heading">
-                <span className="chart-badge">SCHEDULE I STREAMS</span>
-                <h4>Mass Distribution by Material Category</h4>
+                <span className="chart-badge">E-WASTE CATEGORIES</span>
+                <h4>Declared Weight by Material Category</h4>
               </div>
 
               {categories.length > 0 ? (
@@ -331,8 +335,8 @@ export function OperationalSummary({ lots = [], role = "Collector" }) {
             {/* 2. WORKFLOW STATUS SEGMENTATION (GENUINE SVG DONUT CHART) */}
             <div className="op-chart-card">
               <div className="chart-card-heading">
-                <span className="chart-badge">PIPELINE STATUS</span>
-                <h4>Workflow Custody Progress</h4>
+                <span className="chart-badge">WORKFLOW STATUS</span>
+                <h4>Lots by Current Stage</h4>
               </div>
 
               {totalLots > 0 ? (

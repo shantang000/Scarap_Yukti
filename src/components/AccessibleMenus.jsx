@@ -89,7 +89,7 @@ export function ProfileMenuDropdown({ profile, authSession, role, signOut, authB
         >
           <strong>{displayName}</strong>
           <span>{authSession?.user?.email}</span>
-          <span className="auth-role-pill">DATABASE ROLE - {role}</span>
+          <span className="auth-role-pill">Account type: {role}</span>
           <button
             type="button"
             className="btn btn-light btn-small"
@@ -113,10 +113,10 @@ export function RoleSwitcherDropdown({ currentRole, onSelectRole }) {
   const optionRefs = useRef([]);
 
   const roles = [
-    { id: "Seller", desc: "List scrap & review recycler bids" },
-    { id: "Collector", desc: "Aggregate scrap & manage consignments" },
-    { id: "Recycler", desc: "Submit purchase offers & weigh intake" },
-    { id: "Admin", desc: "System audit & workflow governance" }
+    { id: "Seller", desc: "List e-waste & review buyer offers" },
+    { id: "Collector", desc: "Claim pickups & bundle consignments" },
+    { id: "Recycler", desc: "Submit bids & record intake weight" },
+    { id: "Admin", desc: "Review disputes & custody records" }
   ];
 
   const handleEscape = () => {

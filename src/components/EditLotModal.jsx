@@ -1,79 +1,111 @@
-import React, { useState, useEffect } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { Edit3, ShieldCheck, X } from "lucide-react";
-import { validateListingPrivacy } from "../lib/privacyRules.js";
+import { validateLotFormInputs } from "../lib/lotFormValidation.js";
+import { WEIGHT_UNITS } from "../lib/quantityUnits.js";
+import { DiscardChangesBanner } from "./DiscardChangesBanner.jsx";
+import { LotFormFields } from "./LotFormFields.jsx";
 
 export function EditLotModal({ lot, busy, error, onClose, onSave }) {
-  const [formData, setFormData] = useState({
+  const initialValues = {
     title: lot?.title || "",
     category: lot?.category || "Computers",
     weight: String(lot?.weight ?? ""),
+    weightUnit: WEIGHT_UNITS.KG,
     location: lot?.location || "",
     notes: lot?.notes || ""
-  });
-  const [localError, setLocalError] = useState(error || "");
+  };
+
+  const [formData, setFormData] = useState(initialValues);
+  const [fieldError, setFieldError] = useState(error ? { field: null, message: error } : null);
+  const [confirmDiscard, setConfirmDiscard] = useState(false);
+
+  const titleRef = useRef(null);
+  const categoryRef = useRef(null);
+  const weightRef = useRef(null);
+  const locationRef = useRef(null);
+  const notesRef = useRef(null);
+  const fieldRefs = {
+    title: titleRef,
+    category: categoryRef,
+    weight: weightRef,
+    location: locationRef,
+    notes: notesRef
+  };
+
+  const isDirty =
+    formData.title !== initialValues.title ||
+    formData.category !== initialValues.category ||
+    formData.weight !== initialValues.weight ||
+    formData.location !== initialValues.location ||
+    formData.notes !== initialValues.notes;
+
+  const requestClose = () => {
+    if (busy) return;
+    if (isDirty && !confirmDiscard) {
+      setConfirmDiscard(true);
+      return;
+    }
+    onClose();
+  };
 
   useEffect(() => {
     const handleKeyDown = (e) => {
       if (e.key === "Escape" && !busy) {
         e.preventDefault();
-        onClose();
+        if (isDirty && !confirmDiscard) {
+          setConfirmDiscard(true);
+        } else {
+          onClose();
+        }
       }
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [busy, onClose]);
+  }, [busy, confirmDiscard, isDirty, onClose]);
+
+  const handleFieldChange = (field, value) => {
+    setConfirmDiscard(false);
+    setFieldError(null);
+    if (field === "weightUnit") {
+      // Convert displayed numeric value seamlessly when switching unit
+      const currentNum = Number(formData.weight);
+      let converted = formData.weight;
+      if (Number.isFinite(currentNum) && currentNum > 0) {
+        converted = value === WEIGHT_UNITS.MT
+          ? String(Math.round((currentNum / 1000) * 10000) / 10000)
+          : String(Math.round(currentNum * 1000 * 1000) / 1000);
+      }
+      setFormData((prev) => ({ ...prev, weightUnit: value, weight: converted }));
+      return;
+    }
+    setFormData((prev) => ({ ...prev, [field]: value }));
+  };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    const cleanTitle = formData.title.trim();
-    const cleanCategory = formData.category.trim();
-    const cleanLocation = formData.location.trim();
-    const cleanNotes = formData.notes.trim();
-    const numWeight = Number(formData.weight);
-
-    if (cleanTitle.length < 2 || cleanTitle.length > 100) {
-      setLocalError("Lot name must be between 2 and 100 characters.");
-      return;
-    }
-    if (!Number.isFinite(numWeight) || numWeight < 0.1 || numWeight > 100000) {
-      setLocalError("Enter a weight from 0.1 to 100,000 kg.");
-      return;
-    }
-    if (!cleanCategory || cleanCategory.length > 80) {
-      setLocalError("Choose a category with no more than 80 characters.");
-      return;
-    }
-    if (cleanLocation.length < 2 || cleanLocation.length > 160) {
-      setLocalError("Pickup location must be between 2 and 160 characters.");
-      return;
-    }
-    if (cleanNotes.length > 500) {
-      setLocalError("Notes must be 500 characters or fewer.");
+    const validation = validateLotFormInputs(formData);
+    if (!validation.ok) {
+      setFieldError({ field: validation.field, message: validation.message });
+      const targetEl = fieldRefs[validation.field]?.current;
+      targetEl?.focus();
+      targetEl?.scrollIntoView?.({ behavior: "instant", block: "center" });
       return;
     }
 
-    const privacyCheck = validateListingPrivacy({ title: cleanTitle, location: cleanLocation, notes: cleanNotes });
-    if (!privacyCheck.ok) {
-      setLocalError(privacyCheck.reason);
-      return;
-    }
-
-    setLocalError("");
+    setFieldError(null);
     await onSave(lot.id, {
-      title: cleanTitle,
-      category: cleanCategory,
-      weight: numWeight,
-      location: cleanLocation,
-      notes: cleanNotes,
+      ...validation.payload,
       currentStatus: lot.status
     });
   };
+
+  const activeError = fieldError || (error ? { field: null, message: error } : null);
 
   return (
     <div
       className="modal-backdrop"
       onMouseDown={(e) => {
-        if (e.target === e.currentTarget && !busy) onClose();
+        if (e.target === e.currentTarget) requestClose();
       }}
     >
       <div
@@ -86,17 +118,17 @@ export function EditLotModal({ lot, busy, error, onClose, onSave }) {
         <div className="modal-header">
           <div>
             <span className="eyebrow">
-              <Edit3 size={13} /> CONSIGNMENT REVISION
+              <Edit3 size={13} /> EDIT OPEN LISTING
             </span>
-            <h2 id="edit-lot-dialog-title">Edit Lot Details — {lot?.id}</h2>
+            <h2 id="edit-lot-dialog-title">Edit Listing — {lot?.id}</h2>
             <p>
-              Update your listing while it remains in open status. Lots cannot be edited once an offer has been submitted or accepted.
+              Update your details while this listing is open for bids. Editing locks once an offer is submitted or accepted.
             </p>
           </div>
           <button
             type="button"
             className="icon-btn"
-            onClick={() => !busy && onClose()}
+            onClick={requestClose}
             aria-label="Close dialog"
             disabled={busy}
           >
@@ -104,98 +136,27 @@ export function EditLotModal({ lot, busy, error, onClose, onSave }) {
           </button>
         </div>
 
-        <form onSubmit={handleSubmit} className="form-grid">
-          <label className="full">
-            Lot name / Consignment Title
-            <input
-              required
-              maxLength={100}
-              value={formData.title}
-              disabled={busy}
-              onChange={(e) => {
-                setFormData({ ...formData, title: e.target.value });
-                setLocalError("");
-              }}
-              placeholder="e.g. Decommissioned server batch"
-            />
-          </label>
+        <DiscardChangesBanner
+          visible={confirmDiscard}
+          onKeepEditing={() => setConfirmDiscard(false)}
+          onConfirmDiscard={onClose}
+        />
 
-          <label>
-            Material Classification
-            <select
-              value={formData.category}
-              disabled={busy}
-              onChange={(e) => setFormData({ ...formData, category: e.target.value })}
-            >
-              <option>Computers</option>
-              <option>Displays</option>
-              <option>Small electronics</option>
-              <option>Phones and tablets</option>
-              <option>Batteries</option>
-              <option>Mixed e-waste</option>
-              <option>Other</option>
-            </select>
-          </label>
-
-          <label>
-            Estimated Net Mass (kg)
-            <input
-              type="number"
-              min="0.1"
-              max="100000"
-              step="0.1"
-              required
-              disabled={busy}
-              value={formData.weight}
-              onChange={(e) => {
-                setFormData({ ...formData, weight: e.target.value });
-                setLocalError("");
-              }}
-              placeholder="e.g. 42.5"
-            />
-          </label>
-
-          <label className="full">
-            Approximate Logistics Hub / Area
-            <input
-              required
-              minLength={2}
-              maxLength={160}
-              disabled={busy}
-              value={formData.location}
-              onChange={(e) => {
-                setFormData({ ...formData, location: e.target.value });
-                setLocalError("");
-              }}
-              placeholder="e.g. Sector 62, Noida (Do not enter exact flat/door number)"
-            />
-          </label>
-
-          <label className="full">
-            Material Notes & Condition
-            <textarea
-              rows={3}
-              maxLength={500}
-              disabled={busy}
-              value={formData.notes}
-              onChange={(e) => {
-                setFormData({ ...formData, notes: e.target.value });
-                setLocalError("");
-              }}
-              placeholder="Provide specifications, completeness, and packaging notes..."
-            />
-          </label>
-
-          {(localError || error) && (
-            <div className="form-error full" role="alert">
-              {localError || error}
-            </div>
-          )}
+        <form onSubmit={handleSubmit} className="form-grid" noValidate>
+          <LotFormFields
+            values={formData}
+            onChange={handleFieldChange}
+            fieldError={activeError}
+            disabled={busy}
+            fieldRefs={fieldRefs}
+            autoFocusTitle
+            idPrefix="edit-lot"
+          />
 
           <div className="form-note full">
             <ShieldCheck size={16} />
             <span>
-              <strong>Privacy Protection:</strong> Listing areas are public to verified recyclers. Use an approximate industrial hub or neighbourhood. Never enter personal phone numbers, flat/house numbers, or email addresses here.
+              Your listing area and hardware notes are visible to buyers evaluating this lot. Personal phone numbers, emails, and exact house numbers stay hidden until an offer is accepted.
             </span>
           </div>
 
@@ -203,7 +164,7 @@ export function EditLotModal({ lot, busy, error, onClose, onSave }) {
             <button
               type="button"
               className="btn btn-light"
-              onClick={() => !busy && onClose()}
+              onClick={requestClose}
               disabled={busy}
             >
               Cancel
@@ -217,4 +178,3 @@ export function EditLotModal({ lot, busy, error, onClose, onSave }) {
     </div>
   );
 }
-

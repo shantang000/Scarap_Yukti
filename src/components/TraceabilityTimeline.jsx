@@ -29,7 +29,7 @@ export function TraceabilityTimeline({
       label: "Upstream Intake",
       sub: "Listing Published",
       icon: <Package size={14} />,
-      desc: "Lot published with privacy shielding and estimated weight.",
+      desc: "Listing published with approximate pickup area and estimated weight (personal contact details hidden).",
       isDone: ["Open", "Offer submitted", "Pickup scheduled", "Collected", "Recycling review", "Recycled", "Disputed"].includes(lot.status),
       isActive: lot.status === "Open"
     },
@@ -37,9 +37,9 @@ export function TraceabilityTimeline({
       id: "offer",
       key: "Offer submitted",
       label: "Offer Decided",
-      sub: "Commercial Terms Accepted",
+      sub: "Recycler Bid Accepted",
       icon: <Zap size={14} />,
-      desc: "Competitive recycler bid submitted and accepted by lot owner.",
+      desc: "A recycler bid has been submitted and accepted by the listing owner.",
       isDone: ["Pickup scheduled", "Collected", "Recycling review", "Recycled"].includes(lot.status),
       isActive: lot.status === "Offer submitted"
     },
@@ -47,11 +47,11 @@ export function TraceabilityTimeline({
       id: "pickup",
       key: "Pickup scheduled",
       label: "Pickup Coordinated",
-      sub: "Logistics Appointment",
+      sub: "Pickup Time Proposed",
       icon: <Truck size={14} />,
       desc: pickupAppointment
-        ? `Appointment: ${pickupAppointment.status} (${pickupAppointment.scheduledAt ? new Date(pickupAppointment.scheduledAt).toLocaleDateString("en-IN") : "Date pending"})`
-        : "Pickup timing proposed between owner and collector/recycler.",
+        ? `Appointment: ${pickupAppointment.status.replaceAll("_", " ")} (${pickupAppointment.scheduledAt ? new Date(pickupAppointment.scheduledAt).toLocaleDateString("en-IN") : "Date pending"})`
+        : "Owner and accepted recycler agree on a pickup date and time.",
       isDone: ["Collected", "Recycling review", "Recycled"].includes(lot.status),
       isActive: lot.status === "Pickup scheduled"
     },
@@ -59,11 +59,11 @@ export function TraceabilityTimeline({
       id: "collected",
       key: "Collected",
       label: "Custody Handover",
-      sub: "Physical Weighing",
+      sub: "Physical Handover",
       icon: <Scale size={14} />,
-      desc: lot.actualWeight
-        ? `Verified Intake Weight: ${lot.actualWeight} kg recorded.`
-        : "Material received on-site; custody transferred to buyer.",
+      desc: lot.actualWeight != null
+        ? `Recorded receiving weight: ${lot.actualWeight} kg (self-reported by accepted recycler).`
+        : "Material marked collected; awaiting receiving weight entry by accepted recycler.",
       isDone: ["Recycling review", "Recycled"].includes(lot.status),
       isActive: lot.status === "Collected"
     },
@@ -71,11 +71,11 @@ export function TraceabilityTimeline({
       id: "review",
       key: "Recycling review",
       label: "Facility Receiving",
-      sub: "Discrepancy Audit",
+      sub: "Compliance Review",
       icon: <FileText size={14} />,
       desc: lot.evidence
-        ? `Evidence Note: "${lot.evidence}"`
-        : "Weighbridge verification and physical material condition review.",
+        ? `Review Note: "${lot.evidence}"`
+        : "Admin reviews weight match and processing notes before closing lot.",
       isDone: lot.status === "Recycled",
       isActive: lot.status === "Recycling review"
     },
@@ -83,9 +83,9 @@ export function TraceabilityTimeline({
       id: "recycled",
       key: "Recycled",
       label: "Certified Recycled",
-      sub: "Chain Completed",
+      sub: "Workflow Closed",
       icon: <Recycle size={14} />,
-      desc: "Material processed through authorized dismantler/smelter. Custody closed.",
+      desc: "Marked as recycled in workflow records. Statutory certificates must be issued directly by the authorized recycler.",
       isDone: lot.status === "Recycled",
       isActive: lot.status === "Recycled"
     }

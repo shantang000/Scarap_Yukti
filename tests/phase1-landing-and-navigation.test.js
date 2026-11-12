@@ -15,9 +15,9 @@ test("LandingPage component exists and presents all required public sections", (
   assert.ok(existsSync(landingPath), "LandingPage.jsx must exist");
   const landingCode = readFileSync(landingPath, "utf8");
 
-  // Core messaging
-  assert.match(landingCode, /Industrial E-Waste Logistics/);
-  assert.match(landingCode, /Audited Custody\. Closed Loops\./);
+  // Core plain-English messaging
+  assert.match(landingCode, /Sell, Collect, and Recycle E-Waste/);
+  assert.match(landingCode, /With Tracked Custody\./);
   assert.match(landingCode, /INDIAN E-WASTE RULES 2022 ALIGNED/);
 
   // 4 Target Roles with dedicated test-drive triggers
@@ -26,13 +26,13 @@ test("LandingPage component exists and presents all required public sections", (
   assert.match(landingCode, /Launch Recycler Demo/);
   assert.match(landingCode, /Launch Admin Demo/);
 
-  // 4 Workflow stages
-  assert.match(landingCode, /Upstream Listing & Privacy Guard/);
-  assert.match(landingCode, /Aggregator Intake & Custody Handover/);
-  assert.match(landingCode, /Consignment Bundling & Bidding/);
-  assert.match(landingCode, /Weighbridge Intake & Refining Audit/);
+  // Core safeguards & honest prototype boundaries
+  assert.match(landingCode, /Privacy Before Acceptance/);
+  assert.match(landingCode, /Weight Discrepancy Checks/);
+  assert.match(landingCode, /Locked Terms After Bidding/);
+  assert.match(landingCode, /Online Inquiry Form Unavailable/);
 
-  // Regulatory & Discrepancy tolerances
+  // Discrepancy guide categories
   assert.match(landingCode, /Configurable Discrepancy Thresholds/);
   assert.match(landingCode, /Lead-Acid & Lithium Batteries/);
   assert.match(landingCode, /IT Server & PCB Scrap/);
@@ -54,22 +54,21 @@ test("App.jsx integrates LandingPage and URL hash navigation into the unauthenti
   assert.match(appCode, /sessionStorage\.setItem\("scarap_demo_active"/);
 });
 
-test("Collector upstream discovery distinguishes Demo mode from Live Supabase RLS isolation", () => {
+test("Collector upstream discovery distinguishes Demo mode from Live mode restrictions honestly", () => {
   const collectorCode = readFileSync(collectorPath, "utf8");
 
-  // 3-way workspace tabs exist
-  assert.match(collectorCode, /My Aggregated Consignments/);
-  assert.match(collectorCode, /Available Seller Scrap/);
-  assert.match(collectorCode, /My Collection Work/);
+  // 3-way workspace tabs exist with Indian operator-friendly labels
+  assert.match(collectorCode, /Available Pickups/);
+  assert.match(collectorCode, /Collection Work/);
+  assert.match(collectorCode, /My Consignments/);
 
-  // Honest Live-mode compliance notice
-  assert.match(collectorCode, /Live Upstream Seller Intake Requires Tier-1 RLS Authorization/);
-  assert.match(collectorCode, /lots_read_per_role/);
-  assert.match(collectorCode, /HONESTLY ISOLATED \(NO FAKE LIVE DATA\)/);
+  // Honest Live-mode limitation notice (without internal RLS jargon)
+  assert.match(collectorCode, /Direct Seller Pickup Claims Are Not Enabled in Live Mode Yet/);
+  assert.match(collectorCode, /My Consignments/);
 
   // Demo mode claim proposal
-  assert.match(collectorCode, /Propose Collection Terms/);
-  assert.match(collectorCode, /Target Pickup Window/);
+  assert.match(collectorCode, /Claim Pickup Batch/);
+  assert.match(collectorCode, /Planned Pickup Date/);
 });
 
 test("TraceabilityTimeline renders chain of custody pipeline with status markers", () => {
